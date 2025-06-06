@@ -61,6 +61,9 @@ tasks {
     assemble {
         dependsOn("shadowJar")
     }
+    jar {
+        enabled = false
+    }
     shadowJar {
         archiveClassifier = ""
         archiveVersion = pluginVersion
