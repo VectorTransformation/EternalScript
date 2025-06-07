@@ -11,20 +11,17 @@ import io.papermc.paper.command.brigadier.CommandSourceStack
 
 class MainCommand : CommandBuilder() {
     override val builder = builder("eternalscript") {
+        requires(::isOp)
         then(builder("compile") {
-            requires(::isOp)
             executes(::compile)
         })
         then(builder("clear") {
-            requires(::isOp)
             executes(::clear)
         })
         then(builder("config") {
-            requires(::isOp)
             executes(::config)
         })
         then(builder("call") {
-            requires(::isOp)
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
                     ScriptManager.scripts().filter {
@@ -49,7 +46,6 @@ class MainCommand : CommandBuilder() {
             })
         })
         then(builder("load") {
-            requires(::isOp)
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
                     DataManager.scripts().filter {
@@ -63,7 +59,6 @@ class MainCommand : CommandBuilder() {
             })
         })
         then(builder("unload") {
-            requires(::isOp)
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
                     ScriptManager.scripts().filter {

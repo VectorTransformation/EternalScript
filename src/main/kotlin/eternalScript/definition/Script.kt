@@ -58,16 +58,16 @@ abstract class Script : Listener {
         val builder = ScriptCommandBuilder(name).apply(block)
         scriptCommand.register(
             builder.name,
-            builder.description,
             builder.aliases,
-            builder.usage,
+            builder.permission,
             builder.tabCompleter,
-            builder.executor,
-            builder.permission
+            builder.executor
         )
     }
 
     // util
+
+    fun instance() = Root.instance()
 
     fun scripts() = ScriptManager.scripts()
 

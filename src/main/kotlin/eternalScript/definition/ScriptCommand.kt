@@ -15,26 +15,24 @@ class ScriptCommand() {
 
     fun register(
         name: String,
-        description: String,
         aliases: List<String>,
-        usage: String,
+        permission: String?,
         tabCompleter: (sender: CommandSender, label: String, args: List<String>) -> List<String>,
-        executor: (sender: CommandSender, label: String, args: List<String>) -> Boolean,
-        permission: String?
+        executor: (sender: CommandSender, label: String, args: List<String>) -> Unit
     ) {
         val command = object : Command(name) {
             init {
-                setDescription(description)
                 setAliases(aliases)
                 setPermission(permission)
-                setUsage(usage)
             }
 
             override fun tabComplete(sender: CommandSender, alias: String, args: Array<String>): List<String> {
                 return tabCompleter(sender, alias, args.toList())
             }
             override fun execute(sender: CommandSender, label: String, args: Array<String>): Boolean {
-                return executor(sender, label, args.toList())
+                if (!testPermissionSilent(sender)) return true
+                executor(sender, label, args.toList())
+                return true
             }
         }
 

@@ -6,6 +6,5 @@
 command("test-command") {
     executor = { sender, label, args ->
         Bukkit.broadcastMessage("command: ${sender.name}")
-        true
     }
 }
