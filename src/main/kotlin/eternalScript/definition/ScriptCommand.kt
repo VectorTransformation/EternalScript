@@ -17,7 +17,7 @@ class ScriptCommand() {
         name: String,
         aliases: List<String>,
         permission: String?,
-        tabCompleter: (sender: CommandSender, label: String, args: List<String>) -> List<String>,
+        tabCompleter: (sender: CommandSender, alias: String, args: List<String>) -> List<String>,
         executor: (sender: CommandSender, label: String, args: List<String>) -> Unit
     ) {
         val command = object : Command(name) {
@@ -43,16 +43,16 @@ class ScriptCommand() {
         synchronized(lock) {
             if (knownCommands.containsKey(name)) return
             knownCommands[name] = command
+            cache[name] = command
         }
-        cache[name] = command
     }
 
     fun removeCommand(name: String, command: Command) {
         synchronized(lock) {
             if (!knownCommands.containsKey(name)) return
             knownCommands.remove(name, command)
+            cache.remove(name, command)
         }
-        cache.remove(name, command)
     }
 
     fun register(command: Command) {

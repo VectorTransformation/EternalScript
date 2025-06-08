@@ -4,12 +4,12 @@ import eternalScript.data.Lifecycle
 import eternalScript.data.Resource
 import eternalScript.definition.Script
 import eternalScript.definition.ScriptParser
-import eternalScript.extension.toComponent
 import eternalScript.extension.unwrap
 import eternalScript.extension.wrap
 import eternalScript.the.Root
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
-import org.bukkit.entity.Player
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.script.experimental.api.ScriptDiagnostic
 import kotlin.script.experimental.api.valueOrNull
@@ -28,7 +28,6 @@ object ScriptManager {
 
     fun load(script: String, value: String, sender: CommandSender? = null) {
         val unwrap = script.unwrap()
-        remove(unwrap, sender)
 
         val result = eval(value)
 
@@ -38,14 +37,13 @@ object ScriptManager {
                 val message = report.message
                 val exception = report.exception?.let { " | Exception: ${it.message}" }.orEmpty()
                 val result = "${unwrap.wrap()} | Line: $line | Message: $message".plus(exception)
-                Root.warn(result.toComponent())
-                if (sender is Player) {
-                    Root.sendWarn(sender, result)
-                }
+                Root.sendInfo(sender, result)
             }
         }
 
         val returnValue = result.valueOrNull()?.returnValue?.scriptInstance as? Script ?: return
+
+        remove(unwrap, silent = true)
 
         cache[unwrap] = returnValue to ScriptParser(returnValue::class)
 
@@ -53,38 +51,37 @@ object ScriptManager {
 
         val debug = DataManager.config<Boolean>(Resource.CONFIG, "debug")
         if (debug == true) {
-            val result = "Loaded Script [${unwrap.wrap()}]"
-            if (sender is Player) {
-                Root.sendWarn(sender, result)
-            } else {
-                Root.info(result.toComponent())
-            }
+            val result = "Loaded Script - ${unwrap.wrap()}"
+            Root.sendInfo(sender, result)
         }
     }
 
     fun clear(sender: CommandSender? = null) {
-        cache.keys.forEach { key ->
-            remove(key, sender)
+        Root.scope.launch {
+            cache.keys.forEach { key ->
+                launch {
+                    Root.semaphore.withPermit {
+                        remove(key, sender)
+                    }
+                }
+            }
         }
     }
 
-    fun remove(key: String, sender: CommandSender? = null) {
+    fun remove(key: String, sender: CommandSender? = null, silent: Boolean = false) {
         val unwrap = key.unwrap()
-        val script = cache[unwrap]?.first ?: return
 
-        script.call(Lifecycle.DISABLE.function)
+        cache[unwrap]?.first?.call(Lifecycle.DISABLE.function)
+
+        cache.remove(unwrap)
+
+        if (silent) return
 
         val debug = DataManager.config<Boolean>(Resource.CONFIG, "debug")
         if (debug == true) {
-            val result = "Unloaded Script [${unwrap.wrap()}]"
-            if (sender is Player) {
-                Root.sendWarn(sender, result)
-            } else {
-                Root.info(result.toComponent())
-            }
+            val result = "Unloaded Script - ${unwrap.wrap()}"
+            Root.sendInfo(sender, result)
         }
-
-        cache.remove(unwrap)
     }
 
     fun scripts() = cache.keys
@@ -95,6 +92,16 @@ object ScriptManager {
 
     fun call(script: String, function: String, vararg args: Any?) = script(script.unwrap())?.let {
         it.second.call(it.first, function.unwrap(), *args)
+    }
+
+    fun scriptList(sender: CommandSender? = null) {
+        val result = "Script List"
+        Root.sendInfo(sender, result)
+        scripts().map { script ->
+            "- ${script.wrap()}"
+        }.forEach { script ->
+            Root.sendInfo(sender, script, false)
+        }
     }
 }
 

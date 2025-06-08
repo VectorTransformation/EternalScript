@@ -71,6 +71,9 @@ class MainCommand : CommandBuilder() {
                 executes(::unload)
             })
         })
+        then(builder("list") {
+            executes(::list)
+        })
     }
     override val aliases = listOf("es")
 
@@ -110,6 +113,12 @@ class MainCommand : CommandBuilder() {
         val script = StringArgumentType.getString(context, "script")
         val sender = context.source.sender
         ScriptManager.remove(script, sender)
+        return Command.SINGLE_SUCCESS
+    }
+
+    fun list(context: CommandContext<CommandSourceStack>): Int {
+        val sender = context.source.sender
+        ScriptManager.scriptList(sender)
         return Command.SINGLE_SUCCESS
     }
 }

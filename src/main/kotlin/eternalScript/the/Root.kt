@@ -6,8 +6,10 @@ import eternalScript.extension.toComponent
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
 import net.kyori.adventure.text.Component
 import org.bukkit.Bukkit
+import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
@@ -49,20 +51,25 @@ object Root {
 
     fun componentLogger() = instance().componentLogger
 
+    fun send(sender: Player, message: String, origin: Boolean = true) {
+        val hex = "<#EC9800>"
+        if (origin) {
+            sender.sendMessage("$hex[$ORIGIN] $message".toComponent())
+        } else {
+            sender.sendMessage("$hex$message".toComponent())
+        }
+    }
+
     fun info(component: Component) {
         componentLogger().info(component)
     }
 
-    fun warn(component: Component) {
-        componentLogger().warn(component)
-    }
-
-    fun send(sender: Player, component: Component) {
-        sender.sendMessage(component)
-    }
-
-    fun sendWarn(sender: Player, message: String) {
-        sender.sendMessage("<#EC9800>[$ORIGIN] $message".toComponent())
+    fun sendInfo(sender: CommandSender?, message: String, origin: Boolean = true) {
+        if (sender is Player) {
+            send(sender, message, origin)
+        } else {
+            info(message.toComponent())
+        }
     }
 
     fun scheduler() = Bukkit.getScheduler()
@@ -72,4 +79,6 @@ object Root {
     fun onlinePlayers() = Bukkit.getOnlinePlayers()
 
     val scope = CoroutineScope(Dispatchers.Default)
+
+    val semaphore = Semaphore(20)
 }

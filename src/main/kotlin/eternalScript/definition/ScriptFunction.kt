@@ -10,7 +10,7 @@ class ScriptFunction() {
     private val eventCache = ConcurrentHashMap.newKeySet<String>()
 
     fun <T : Any> save(function: String, block: (T) -> Unit) {
-        val queue = cache.computeIfAbsent(function) {
+        val queue = cache.getOrPut(function) {
             ConcurrentLinkedQueue()
         }
         queue.add { block(it as T) }
@@ -21,9 +21,13 @@ class ScriptFunction() {
     fun <T : Any> call(script: Script, function: String, arg: T) {
         cache[function]?.forEach { it.invoke(arg) }
         if (Lifecycle.DISABLE.check(function)) {
-            Root.unregisters(script)
-            script.scriptCommand.clear()
+            clear(script)
         }
+    }
+
+    fun clear(script: Script) {
+        Root.unregisters(script)
+        script.scriptCommand.clear()
     }
 
     fun call(script: Script, function: String) = call(script, function, Unit)

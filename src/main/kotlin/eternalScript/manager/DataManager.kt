@@ -2,8 +2,8 @@ package eternalScript.manager
 
 import eternalScript.data.Resource
 import eternalScript.the.Root
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
 import org.bukkit.configuration.file.YamlConfiguration
@@ -15,7 +15,7 @@ import java.util.zip.ZipFile
 object DataManager {
     private val EXTENSION = listOf("kt", "kts")
     private val cache = ConcurrentHashMap<Resource, YamlConfiguration>()
-    private val semaphore = Semaphore(20)
+    private var job: Job? = null
 
     fun all() {
         makeAll()
@@ -60,19 +60,13 @@ object DataManager {
         readAll(sender)
     }
 
-    fun scripts() = Resource.SCRIPTS.searchAllSequence(
-        { file ->
-            val name = file.name
-            !name.startsWith("-") && file.extension in EXTENSION
-        },
-        { file ->
-            val name = file.name
-            !name.startsWith("-")
-        }
-    ).map(::scriptPath)
-
     fun readAll(sender: CommandSender? = null) {
-        Root.scope.launch {
+        if (job?.isActive == true) {
+            val result = "Script not loaded yet. Please wait."
+            Root.sendInfo(sender, result)
+            return
+        }
+        job = Root.scope.launch {
             Resource.SCRIPTS.searchAllSequence(
                 { file ->
                     val name = file.name
@@ -84,7 +78,7 @@ object DataManager {
                 }
             ).forEach { file ->
                 launch {
-                    semaphore.withPermit {
+                    Root.semaphore.withPermit {
                         runCatching {
                             val script = scriptPath(file)
                             val value = file.readText()
@@ -95,6 +89,17 @@ object DataManager {
             }
         }
     }
+
+    fun scripts() = Resource.SCRIPTS.searchAllSequence(
+        { file ->
+            val name = file.name
+            !name.startsWith("-") && file.extension in EXTENSION
+        },
+        { file ->
+            val name = file.name
+            !name.startsWith("-")
+        }
+    ).map(::scriptPath)
 
     fun scriptPath(script: File) = filePath(script, Resource.SCRIPTS)
 
