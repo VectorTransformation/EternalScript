@@ -25,7 +25,8 @@ class MainCommand : CommandBuilder() {
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
                     ScriptManager.scripts().filter {
-                        it.lowercase().startsWith(builder.remainingLowerCase)
+                        it.lowercase().startsWith(builder.remainingLowerCase) &&
+                                ScriptManager.functions(it).isNotEmpty()
                     }.forEach {
                         builder.suggest(it.wrap())
                     }
@@ -103,6 +104,7 @@ class MainCommand : CommandBuilder() {
 
     fun load(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
+        if (script !in DataManager.scripts()) return Command.SINGLE_SUCCESS
         val value = Resource.SCRIPTS.child(script).readText()
         val sender = context.source.sender
         ScriptManager.load(script, value, sender)

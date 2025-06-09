@@ -14,6 +14,7 @@ import java.util.zip.ZipFile
 
 object DataManager {
     private val EXTENSION = listOf("kt", "kts")
+    private val IGNORE = "-"
     private val cache = ConcurrentHashMap<Resource, YamlConfiguration>()
     private var job: Job? = null
 
@@ -70,11 +71,11 @@ object DataManager {
             Resource.SCRIPTS.searchAllSequence(
                 { file ->
                     val name = file.name
-                    !name.startsWith("-") && file.extension in EXTENSION
+                    !name.startsWith(IGNORE) && file.extension in EXTENSION
                 },
                 { file ->
                     val name = file.name
-                    !name.startsWith("-")
+                    !name.startsWith(IGNORE)
                 }
             ).forEach { file ->
                 launch {
@@ -93,11 +94,11 @@ object DataManager {
     fun scripts() = Resource.SCRIPTS.searchAllSequence(
         { file ->
             val name = file.name
-            !name.startsWith("-") && file.extension in EXTENSION
+            !name.startsWith(IGNORE) && file.extension in EXTENSION
         },
         { file ->
             val name = file.name
-            !name.startsWith("-")
+            !name.startsWith(IGNORE)
         }
     ).map(::scriptPath)
 
