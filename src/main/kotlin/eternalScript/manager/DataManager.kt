@@ -14,6 +14,7 @@ import java.util.zip.ZipFile
 
 object DataManager {
     private val EXTENSION = listOf("kt", "kts")
+    private val SYNC = "!"
     private val IGNORE = "-"
     private val cache = ConcurrentHashMap<Resource, YamlConfiguration>()
     private var job: Job? = null
@@ -61,21 +62,18 @@ object DataManager {
         readAll(sender)
     }
 
-    fun readAll(sender: CommandSender? = null) {
-        if (job?.isActive == true) {
-            val result = "Script not loaded yet. Please wait."
-            Root.sendInfo(sender, result)
-            return
-        }
+    fun readAsync(sender: CommandSender? = null) {
         job = Root.scope.launch {
             Resource.SCRIPTS.searchAllSequence(
                 { file ->
                     val name = file.name
-                    !name.startsWith(IGNORE) && file.extension in EXTENSION
+                    !name.startsWith(IGNORE) && file.extension in EXTENSION &&
+                            !name.startsWith(SYNC)
                 },
                 { file ->
                     val name = file.name
-                    !name.startsWith(IGNORE)
+                    !name.startsWith(IGNORE) &&
+                            !name.startsWith(SYNC)
                 }
             ).forEach { file ->
                 launch {
@@ -91,6 +89,43 @@ object DataManager {
         }
     }
 
+    fun readSync(sender: CommandSender? = null) {
+        Resource.SCRIPTS.searchAllSequence(
+            { file ->
+                val name = file.name
+
+                if (name.startsWith(IGNORE) || file.extension !in EXTENSION) {
+                    return@searchAllSequence false
+                }
+
+                scriptPath(file)
+                    .split("/")
+                    .mapNotNull { parent ->
+                        parent.ifEmpty { null }
+                    }.any { parent ->
+                        parent.startsWith(SYNC)
+                    }
+            }
+        ).forEach { file ->
+            runCatching {
+                val script = scriptPathSync(file)
+                val value = file.readText()
+                ScriptManager.load(script, value, sender)
+            }
+        }
+    }
+
+    fun readAll(sender: CommandSender? = null) {
+        if (job?.isActive == true) {
+            val result = "Script not loaded yet. Please wait."
+            Root.sendInfo(sender, result)
+            return
+        }
+        ScriptManager.clear(sender, true)
+        readSync(sender)
+        readAsync(sender)
+    }
+
     fun scripts() = Resource.SCRIPTS.searchAllSequence(
         { file ->
             val name = file.name
@@ -101,6 +136,14 @@ object DataManager {
             !name.startsWith(IGNORE)
         }
     ).map(::scriptPath)
+
+    fun scriptPathSync(script: File) = scriptPath(script).let { path ->
+        path.split("/").joinToString("/") { parent ->
+            if (parent.startsWith(SYNC)) {
+                parent.replaceFirst(SYNC, "")
+            } else parent
+        }
+    }
 
     fun scriptPath(script: File) = filePath(script, Resource.SCRIPTS)
 

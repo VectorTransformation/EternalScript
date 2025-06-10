@@ -56,12 +56,12 @@ object ScriptManager {
         }
     }
 
-    fun clear(sender: CommandSender? = null) {
+    fun clear(sender: CommandSender? = null, silent: Boolean = false) {
         Root.scope.launch {
             cache.keys.forEach { key ->
                 launch {
                     Root.semaphore.withPermit {
-                        remove(key, sender)
+                        remove(key, sender, silent)
                     }
                 }
             }
