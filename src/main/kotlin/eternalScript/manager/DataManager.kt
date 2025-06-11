@@ -78,7 +78,7 @@ object DataManager {
                 launch {
                     Root.semaphore.withPermit {
                         runCatching {
-                            val script = scriptPathSync(file)
+                            val script = scriptPath(file)
                             val value = file.readText()
                             ScriptManager.load(script, value, sender)
                         }
@@ -135,14 +135,6 @@ object DataManager {
             !ScriptPrefix.IGNORE.check(name)
         }
     ).map(::scriptPath)
-
-    fun scriptPathSync(script: File) = scriptPath(script).let { path ->
-        path.split("/").joinToString("/") { parent ->
-            if (ScriptPrefix.SYNC.check(parent)) {
-                ScriptPrefix.SYNC.replaceFirst(parent, "")
-            } else parent
-        }
-    }
 
     fun scriptPath(script: File) = filePath(script, Resource.SCRIPTS)
 
