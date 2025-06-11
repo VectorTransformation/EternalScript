@@ -1,6 +1,6 @@
 package eternalScript.definition
 
-import eternalScript.data.Lifecycle
+import eternalScript.data.ScriptLifecycle
 import eternalScript.the.Root
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -20,7 +20,7 @@ class ScriptFunction() {
 
     fun <T : Any> call(script: Script, function: String, arg: T) {
         cache[function]?.forEach { it.invoke(arg) }
-        if (Lifecycle.DISABLE.check(function)) {
+        if (ScriptLifecycle.DISABLE.check(function)) {
             clear(script)
         }
     }

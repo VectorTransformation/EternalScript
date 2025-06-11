@@ -1,6 +1,6 @@
 package eternalScript.definition
 
-import eternalScript.data.Lifecycle
+import eternalScript.data.ScriptLifecycle
 import eternalScript.manager.ScriptManager
 import eternalScript.the.Root
 import org.bukkit.event.Event
@@ -30,9 +30,9 @@ abstract class Script : Listener {
 
     // lifecycle
 
-    fun enable(block: () -> Unit) = save(Lifecycle.ENABLE.function, block)
+    fun enable(block: () -> Unit) = save(ScriptLifecycle.ENABLE.function, block)
 
-    fun disable(block: () -> Unit) = save(Lifecycle.DISABLE.function, block)
+    fun disable(block: () -> Unit) = save(ScriptLifecycle.DISABLE.function, block)
 
     // event
 

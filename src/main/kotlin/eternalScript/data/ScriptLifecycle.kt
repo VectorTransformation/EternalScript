@@ -1,6 +1,6 @@
 package eternalScript.data
 
-enum class Lifecycle(val function: String) {
+enum class ScriptLifecycle(val function: String) {
     ENABLE("enable"),
     DISABLE("disable"),
     ;

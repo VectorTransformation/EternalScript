@@ -1,6 +1,6 @@
 package eternalScript.manager
 
-import eternalScript.data.Lifecycle
+import eternalScript.data.ScriptLifecycle
 import eternalScript.data.Resource
 import eternalScript.definition.Script
 import eternalScript.definition.ScriptParser
@@ -47,13 +47,13 @@ object ScriptManager {
 
         cache[unwrap] = returnValue to ScriptParser(returnValue::class)
 
-        returnValue.call(Lifecycle.ENABLE.function)
-
         val debug = DataManager.config<Boolean>(Resource.CONFIG, "debug")
         if (debug == true) {
             val result = "Loaded Script - ${unwrap.wrap()}"
             Root.sendInfo(sender, result)
         }
+
+        returnValue.call(ScriptLifecycle.ENABLE.function)
     }
 
     fun clear(sender: CommandSender? = null, silent: Boolean = false) {
@@ -71,7 +71,7 @@ object ScriptManager {
     fun remove(key: String, sender: CommandSender? = null, silent: Boolean = false) {
         val unwrap = key.unwrap()
 
-        cache[unwrap]?.first?.call(Lifecycle.DISABLE.function)
+        cache[unwrap]?.first?.call(ScriptLifecycle.DISABLE.function)
 
         cache.remove(unwrap)
 

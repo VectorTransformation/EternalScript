@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.4"
+val pluginVersion = "1.0.5"
 val javaVersion = 21
 val minecraftVersion = "1.21.4"
 val minecraftHeapSize = 8

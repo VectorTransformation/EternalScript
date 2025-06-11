@@ -1,6 +1,7 @@
 package eternalScript.manager
 
 import eternalScript.data.Resource
+import eternalScript.data.ScriptPrefix
 import eternalScript.the.Root
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -14,8 +15,6 @@ import java.util.zip.ZipFile
 
 object DataManager {
     private val EXTENSION = listOf("kt", "kts")
-    private val SYNC = "!"
-    private val IGNORE = "-"
     private val cache = ConcurrentHashMap<Resource, YamlConfiguration>()
     private var job: Job? = null
 
@@ -67,19 +66,19 @@ object DataManager {
             Resource.SCRIPTS.searchAllSequence(
                 { file ->
                     val name = file.name
-                    !name.startsWith(IGNORE) && file.extension in EXTENSION &&
-                            !name.startsWith(SYNC)
+                    !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION &&
+                            !ScriptPrefix.SYNC.check(name)
                 },
                 { file ->
                     val name = file.name
-                    !name.startsWith(IGNORE) &&
-                            !name.startsWith(SYNC)
+                    !ScriptPrefix.IGNORE.check(name) &&
+                            !ScriptPrefix.SYNC.check(name)
                 }
             ).forEach { file ->
                 launch {
                     Root.semaphore.withPermit {
                         runCatching {
-                            val script = scriptPath(file)
+                            val script = scriptPathSync(file)
                             val value = file.readText()
                             ScriptManager.load(script, value, sender)
                         }
@@ -94,7 +93,7 @@ object DataManager {
             { file ->
                 val name = file.name
 
-                if (name.startsWith(IGNORE) || file.extension !in EXTENSION) {
+                if (ScriptPrefix.IGNORE.check(name) || file.extension !in EXTENSION) {
                     return@searchAllSequence false
                 }
 
@@ -103,12 +102,12 @@ object DataManager {
                     .mapNotNull { parent ->
                         parent.ifEmpty { null }
                     }.any { parent ->
-                        parent.startsWith(SYNC)
+                        ScriptPrefix.SYNC.check(parent)
                     }
             }
         ).forEach { file ->
             runCatching {
-                val script = scriptPathSync(file)
+                val script = scriptPath(file)
                 val value = file.readText()
                 ScriptManager.load(script, value, sender)
             }
@@ -129,18 +128,18 @@ object DataManager {
     fun scripts() = Resource.SCRIPTS.searchAllSequence(
         { file ->
             val name = file.name
-            !name.startsWith(IGNORE) && file.extension in EXTENSION
+            !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION
         },
         { file ->
             val name = file.name
-            !name.startsWith(IGNORE)
+            !ScriptPrefix.IGNORE.check(name)
         }
     ).map(::scriptPath)
 
     fun scriptPathSync(script: File) = scriptPath(script).let { path ->
         path.split("/").joinToString("/") { parent ->
-            if (parent.startsWith(SYNC)) {
-                parent.replaceFirst(SYNC, "")
+            if (ScriptPrefix.SYNC.check(parent)) {
+                ScriptPrefix.SYNC.replaceFirst(parent, "")
             } else parent
         }
     }

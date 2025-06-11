@@ -32,15 +32,6 @@ enum class Resource(val file: File) {
         directoryFilter: (File) -> Boolean = { true }
     ) = file.searchAllSequence(fileFilter, directoryFilter)
 
-    fun searchFlow(
-        fileFilter: (File) -> Boolean = { true }
-    ) = file.searchFlow(fileFilter)
-
-    fun searchAllFlow(
-        fileFilter: (File) -> Boolean = { true },
-        directoryFilter: (File) -> Boolean = { true }
-    ) = file.searchAllFlow(fileFilter, directoryFilter)
-
     fun clear() = file.clear()
 
     fun exists() = file.exists()
