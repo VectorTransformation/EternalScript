@@ -6,10 +6,6 @@
 
 
 
------
-
-
-
 ## Key Commands
 
 
@@ -24,17 +20,13 @@ Here are the main commands for Eternal Script:
 
   * `/es config`: Reloads the plugin configuration.
 
-  * `/es call <script> <function>`: Calls a function within a specified script.
+  * `/es call [script] [function]`: Calls a function within a specified script.
 
-  * `/es load <script_path>`: Loads a specific script file (e.g., `/es load "/hello.kt"`).
+  * `/es load [script]`: Loads a specific script file (e.g., `/es load "/hello.kt"`).
 
-  * `/es unload <script_path>`: Unloads a specific script file (e.g., `/es unload "/hello.kt"`).
+  * `/es unload [script]`: Unloads a specific script file (e.g., `/es unload "/hello.kt"`).
 
   * `/es list`: Lists all currently loaded scripts.
-
-
-
------
 
 
 
@@ -176,10 +168,6 @@ Control which scripts are processed by the plugin.
 
 
 
------
-
-
-
 ## Installation
 
 
@@ -188,15 +176,11 @@ It's quick and easy to get Eternal Script up and running on your server:
 
 
 
-1.  You can download the latest version of **EternalScript** from [Modrinth](https://modrinth.com/).
+1.  You can download the latest version of **EternalScript** from [Modrinth](https://modrinth.com/plugin/eternalscript).
 
 2.  Upload the downloaded file to your Minecraft server's `plugins` folder.
 
 3.  Start or restart your server to load Eternal Script.
-
-
-
------
 
 
 
@@ -212,7 +196,7 @@ Experience the power of Eternal Script by writing and running your first Kotlin 
 
 2.  Write your Kotlin script file with a **.kt extension** inside this `scripts` folder.
 
-3.  From the server console, you can use the `/es load "/<script_file_name>.kt"` command to load a specific script, or `/es compile` to load all scripts within the folder.
+3.  From the server console, you can use the `/es load "/[script].kt"` command to load a specific script, or `/es compile` to load all scripts within the folder.
 
 
 
