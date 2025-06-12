@@ -2,8 +2,6 @@
 
 EternalScript allows you to dynamically load and manage code at runtime on your Minecraft Paper server without requiring restarts. It supports diverse customization features like script lifecycle management, event handling, and custom commands.
 
----
-
 ### Commands
 
 Here are the available commands for EternalScript:
@@ -15,8 +13,6 @@ Here are the available commands for EternalScript:
 * `/es load [script]`: Loads a specific script file (e.g., `/es load "/hello.kt"`).
 * `/es unload [script]`: Unloads a specific script file (e.g., `/es unload "/hello.kt"`).
 * `/es list`: Lists all currently loaded scripts.
-
----
 
 ### Script Lifecycle
 
@@ -33,8 +29,6 @@ disable {
     Bukkit.broadcastMessage("Eternal Script: Script unloaded!")
 }
 ```
-
----
 
 ### Event Handling
 
@@ -54,8 +48,6 @@ event<PlayerQuitEvent> { event ->
 }
 ```
 
----
-
 ### Custom Commands
 
 Define and register your own in-game commands directly from your scripts.
@@ -73,8 +65,6 @@ command("test-command") {
 }
 ```
 
----
-
 ### Script Inclusion/Exclusion Rules
 
 Control which scripts the plugin processes.
@@ -82,8 +72,6 @@ Control which scripts the plugin processes.
 * `*.kt | *.kts`: Includes all Kotlin files (`.kt`) and Kotlin script files (`.kts`).
 * `-*/ *.kt | -*.kt`: Ignores specific folders or files (e.g., excludes scripts in subfolders or specific files).
 * `!*/* .kt | !*.kt`: Loads specific folders or files synchronously (e.g., processes them before other scripts at server startup).
-
----
 
 ### Installation
 
@@ -93,8 +81,6 @@ It's quick and easy to get EternalScript up and running on your server:
 2.  Upload the downloaded file to your Minecraft server's `plugins` folder.
 3.  Start or restart your server to load EternalScript.
 
----
-
 ### Getting Started
 
 Experience the power of EternalScript by writing and running your first Kotlin script:
@@ -102,8 +88,6 @@ Experience the power of EternalScript by writing and running your first Kotlin s
 1.  After installation, a `plugins/EternalScript/scripts/` folder will be created.
 2.  Write your Kotlin script file with a `.kt` extension inside this `scripts` folder.
 3.  From the server console, you can use the `/es load "/[script].kt"` command to load a specific script, or `/es compile` to load all scripts within the folder.
-
----
 
 ### Simple "Hello World" Example
 
