@@ -4,19 +4,19 @@
 
 ## Command
 
-  * `/es compile`: Compiles and loads all scripts within the configured script folder.
+/es compile - Compiles and loads all scripts within the configured script folder.
 
-  * `/es clear`: Unloads all currently loaded scripts.
+/es clear - Unloads all currently loaded scripts.
 
-  * `/es config`: Reloads the plugin configuration.
+/es config - Reloads the plugin configuration.
 
-  * `/es call <script> <function>`: Calls a function within a specified script.
+/es call [script] [function] - Calls a function within a specified script.
 
-  * `/es load <script>`: Loads a specific script file (e.g., `/es load "/hello.kt"`).
+/es load [script] - Loads a specific script file (e.g., `/es load "/hello.kt"`).
 
-  * `/es unload <script>`: Unloads a specific script file (e.g., `/es unload "/hello.kt"`).
+/es unload [script] - Unloads a specific script file (e.g., `/es unload "/hello.kt"`).
 
-  * `/es list`: Lists all currently loaded scripts.
+/es list - Lists all currently loaded scripts.
 
 ### Script Lifecycle
 
