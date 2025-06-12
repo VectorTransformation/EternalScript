@@ -6,6 +6,4 @@ enum class ScriptPrefix(val prefix: String) {
     ;
 
     fun check(other: String) = other.startsWith(prefix)
-
-    fun replaceFirst(other: String, newValue: String) = other.replaceFirst(prefix, newValue)
 }
