@@ -1,21 +1,20 @@
 package eternalScript.manager
 
+import eternalScript.data.Config
 import eternalScript.data.Resource
 import eternalScript.data.ScriptPrefix
+import eternalScript.extension.searchAllSequence
 import eternalScript.the.Root
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
-import org.bukkit.configuration.file.YamlConfiguration
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 object DataManager {
     private val EXTENSION = listOf("kt", "kts")
-    private val cache = ConcurrentHashMap<Resource, YamlConfiguration>()
     private var job: Job? = null
 
     fun all() {
@@ -43,19 +42,7 @@ object DataManager {
                     }
             }
         }
-
-        if (!Resource.CONFIG.exists()) {
-            Root.instance().saveDefaultConfig()
-        }
-
-        config()
     }
-
-    fun config() {
-        cache[Resource.CONFIG] = YamlConfiguration.loadConfiguration(Resource.CONFIG.file)
-    }
-
-    fun <T : Any> config(resource: Resource, key: String) = cache[resource]?.get(key) as? T
 
     fun compile(sender: CommandSender? = null) {
         readAll(sender)
@@ -63,18 +50,20 @@ object DataManager {
 
     fun readAsync(sender: CommandSender? = null) {
         job = Root.scope.launch {
-            Resource.SCRIPTS.searchAllSequence(
-                { file ->
-                    val name = file.name
-                    !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION &&
-                            !ScriptPrefix.SYNC.check(name)
-                },
-                { file ->
-                    val name = file.name
-                    !ScriptPrefix.IGNORE.check(name) &&
-                            !ScriptPrefix.SYNC.check(name)
-                }
-            ).forEach { file ->
+            ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
+                Resource.PLUGINS.child(script).searchAllSequence(
+                    { file ->
+                        val name = file.name
+                        !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION &&
+                                !ScriptPrefix.SYNC.check(name)
+                    },
+                    { file ->
+                        val name = file.name
+                        !ScriptPrefix.IGNORE.check(name) &&
+                                !ScriptPrefix.SYNC.check(name)
+                    }
+                )
+            }.forEach { file ->
                 launch {
                     Root.semaphore.withPermit {
                         runCatching {
@@ -89,23 +78,25 @@ object DataManager {
     }
 
     fun readSync(sender: CommandSender? = null) {
-        Resource.SCRIPTS.searchAllSequence(
-            { file ->
-                val name = file.name
+        ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
+            Resource.PLUGINS.child(script).searchAllSequence(
+                { file ->
+                    val name = file.name
 
-                if (ScriptPrefix.IGNORE.check(name) || file.extension !in EXTENSION) {
-                    return@searchAllSequence false
-                }
-
-                scriptPath(file)
-                    .split("/")
-                    .mapNotNull { parent ->
-                        parent.ifEmpty { null }
-                    }.any { parent ->
-                        ScriptPrefix.SYNC.check(parent)
+                    if (ScriptPrefix.IGNORE.check(name) || file.extension !in EXTENSION) {
+                        return@searchAllSequence false
                     }
-            }
-        ).forEach { file ->
+
+                    scriptPath(file)
+                        .split("/")
+                        .mapNotNull { parent ->
+                            parent.ifEmpty { null }
+                        }.any { parent ->
+                            ScriptPrefix.SYNC.check(parent)
+                        }
+                }
+            )
+        }.forEach { file ->
             runCatching {
                 val script = scriptPath(file)
                 val value = file.readText()
@@ -125,16 +116,18 @@ object DataManager {
         readAsync(sender)
     }
 
-    fun scripts() = Resource.SCRIPTS.searchAllSequence(
-        { file ->
-            val name = file.name
-            !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION
-        },
-        { file ->
-            val name = file.name
-            !ScriptPrefix.IGNORE.check(name)
-        }
-    ).map(::scriptPath)
+    fun scripts() = ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
+        Resource.PLUGINS.child(script).searchAllSequence(
+            { file ->
+                val name = file.name
+                !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION
+            },
+            { file ->
+                val name = file.name
+                !ScriptPrefix.IGNORE.check(name)
+            }
+        )
+    }.map(::scriptPath)
 
     fun scriptPath(script: File) = filePath(script, Resource.SCRIPTS)
 

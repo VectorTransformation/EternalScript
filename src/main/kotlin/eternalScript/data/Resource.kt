@@ -7,6 +7,7 @@ import java.io.File
 private val dataFolder = Root.dataFolder()
 
 enum class Resource(val file: File) {
+    PLUGINS(dataFolder.parentFile),
     DATA_FOLDER(dataFolder),
     SCRIPTS(dataFolder.child("scripts")),
     CONFIG(dataFolder.child("config.yml")),

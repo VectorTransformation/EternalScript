@@ -4,7 +4,7 @@ import java.io.File
 
 fun File.child(child: String) = File(this, child)
 
-fun File.make() {
+fun File.make() = apply {
     parentFile?.mkdirs()
     if (extension.isEmpty()) mkdir() else createNewFile()
 }

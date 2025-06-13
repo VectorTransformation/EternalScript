@@ -1,7 +1,7 @@
 package eternalScript.manager
 
+import eternalScript.data.Config
 import eternalScript.data.ScriptLifecycle
-import eternalScript.data.Resource
 import eternalScript.definition.Script
 import eternalScript.definition.ScriptParser
 import eternalScript.extension.unwrap
@@ -47,8 +47,7 @@ object ScriptManager {
 
         cache[unwrap] = returnValue to ScriptParser(returnValue::class)
 
-        val debug = DataManager.config<Boolean>(Resource.CONFIG, "debug")
-        if (debug == true) {
+        if (ConfigManager.value(Config.DEBUG)) {
             val result = "Loaded Script - ${unwrap.wrap()}"
             Root.sendInfo(sender, result)
         }
@@ -77,8 +76,7 @@ object ScriptManager {
 
         if (silent) return
 
-        val debug = DataManager.config<Boolean>(Resource.CONFIG, "debug")
-        if (debug == true) {
+        if (ConfigManager.value(Config.DEBUG)) {
             val result = "Unloaded Script - ${unwrap.wrap()}"
             Root.sendInfo(sender, result)
         }

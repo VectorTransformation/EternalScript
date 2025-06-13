@@ -4,5 +4,5 @@
  *
  */
 fun main() {
-    Bukkit.broadcastMessage("Hello world!")
+    Bukkit.broadcastMessage("Hello, function!")
 }

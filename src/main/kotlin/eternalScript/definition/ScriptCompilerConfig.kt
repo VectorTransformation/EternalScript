@@ -1,6 +1,9 @@
 package eternalScript.definition
 
+import eternalScript.data.Config
 import eternalScript.data.Resource
+import eternalScript.extension.searchAllSequence
+import eternalScript.manager.ConfigManager
 import org.bukkit.Bukkit
 import java.io.File
 import java.util.jar.JarFile
@@ -15,9 +18,11 @@ import kotlin.script.experimental.jvm.util.classpathFromClassloader
 private val pluginClassPath = Bukkit.getPluginManager().plugins.flatMap { plugin ->
     classpathFromClassloader(plugin.javaClass.classLoader) ?: emptyList()
 }
-private val libraryClassPath = Resource.LIBS.searchAllSequence(
-    { it.extension == "jar" }
-)
+private val libraryClassPath = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
+    Resource.PLUGINS.child(lib).searchAllSequence(
+        { it.extension == "jar" }
+    )
+}
 private val classPath = pluginClassPath + libraryClassPath
 
 fun ScriptCompilationConfiguration.Builder.importClassPath(list: List<File>) {

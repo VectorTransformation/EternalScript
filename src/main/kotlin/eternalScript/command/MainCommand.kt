@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.data.Resource
 import eternalScript.extension.wrap
+import eternalScript.manager.ConfigManager
 import eternalScript.manager.DataManager
 import eternalScript.manager.ScriptManager
 import io.papermc.paper.command.brigadier.CommandSourceStack
@@ -91,7 +92,8 @@ class MainCommand : CommandBuilder() {
     }
 
     fun config(context: CommandContext<CommandSourceStack>): Int {
-        DataManager.config()
+        val sender = context.source.sender
+        ConfigManager.all(sender, false)
         return Command.SINGLE_SUCCESS
     }
 

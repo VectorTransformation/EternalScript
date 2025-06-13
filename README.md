@@ -97,7 +97,7 @@ Create a `hello.kt` file in the `plugins/EternalScript/scripts/` folder and ente
 // plugins/EternalScript/scripts/hello.kt
 
 enable {
-    Bukkit.broadcastMessage("Hello from Eternal Script!")
+    Bukkit.broadcastMessage("Hello, world!")
 }
 ```
 
