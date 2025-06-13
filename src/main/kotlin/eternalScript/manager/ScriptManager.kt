@@ -26,7 +26,7 @@ object ScriptManager {
 
     private fun eval(value: String) = compiler.eval(value.toScriptSource(), compilerConfig, evaluatorConfig)
 
-    fun load(script: String, value: String, sender: CommandSender? = null) {
+    fun load(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
         val unwrap = script.unwrap()
 
         val result = eval(value)
@@ -48,8 +48,12 @@ object ScriptManager {
         cache[unwrap] = returnValue to ScriptParser(returnValue::class)
 
         if (ConfigManager.value(Config.DEBUG)) {
-            val result = "Loaded Script - ${unwrap.wrap()}"
-            Root.sendInfo(sender, result)
+            if (!isCompile) {
+                val result = "Loaded Script"
+                Root.sendInfo(sender, result)
+            }
+            val script = "- ${unwrap.wrap()}"
+            Root.sendInfo(sender,  script, false)
         }
 
         returnValue.call(ScriptLifecycle.ENABLE.function)
@@ -57,17 +61,23 @@ object ScriptManager {
 
     fun clear(sender: CommandSender? = null, silent: Boolean = false) {
         Root.scope.launch {
+            if (!silent) {
+                if (ConfigManager.value(Config.DEBUG)) {
+                    val result = "Unloaded Script"
+                    Root.sendInfo(sender, result)
+                }
+            }
             cache.keys.forEach { key ->
                 launch {
                     Root.semaphore.withPermit {
-                        remove(key, sender, silent)
+                        remove(key, sender, silent, true)
                     }
                 }
             }
         }
     }
 
-    fun remove(key: String, sender: CommandSender? = null, silent: Boolean = false) {
+    fun remove(key: String, sender: CommandSender? = null, silent: Boolean = false, isClear: Boolean = false) {
         val unwrap = key.unwrap()
 
         cache[unwrap]?.first?.call(ScriptLifecycle.DISABLE.function)
@@ -77,8 +87,12 @@ object ScriptManager {
         if (silent) return
 
         if (ConfigManager.value(Config.DEBUG)) {
-            val result = "Unloaded Script - ${unwrap.wrap()}"
-            Root.sendInfo(sender, result)
+            if (!isClear) {
+                val result = "Unloaded Script"
+                Root.sendInfo(sender, result)
+            }
+            val script = "- ${unwrap.wrap()}"
+            Root.sendInfo(sender,  script, false)
         }
     }
 

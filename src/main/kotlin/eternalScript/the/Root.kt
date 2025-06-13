@@ -7,7 +7,6 @@ import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
-import net.kyori.adventure.text.Component
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
@@ -60,15 +59,19 @@ object Root {
         }
     }
 
-    fun info(component: Component) {
-        componentLogger().info(component)
+    fun info(message: String, origin: Boolean = true) {
+        if (origin) {
+            componentLogger().info(message.toComponent())
+        } else {
+            Bukkit.getLogger().info(message)
+        }
     }
 
     fun sendInfo(sender: CommandSender?, message: String, origin: Boolean = true) {
         if (sender is Player) {
             send(sender, message, origin)
         } else {
-            info(message.toComponent())
+            info(message, origin)
         }
     }
 

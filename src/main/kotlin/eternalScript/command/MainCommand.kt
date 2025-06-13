@@ -107,7 +107,7 @@ class MainCommand : CommandBuilder() {
     fun load(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
         if (script !in DataManager.scripts()) return Command.SINGLE_SUCCESS
-        val value = Resource.SCRIPTS.child(script).readText()
+        val value = Resource.PLUGINS.child(script).readText()
         val sender = context.source.sender
         ScriptManager.load(script, value, sender)
         return Command.SINGLE_SUCCESS

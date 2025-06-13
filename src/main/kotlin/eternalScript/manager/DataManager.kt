@@ -69,7 +69,7 @@ object DataManager {
                         runCatching {
                             val script = scriptPath(file)
                             val value = file.readText()
-                            ScriptManager.load(script, value, sender)
+                            ScriptManager.load(script, value, sender, true)
                         }
                     }
                 }
@@ -100,7 +100,7 @@ object DataManager {
             runCatching {
                 val script = scriptPath(file)
                 val value = file.readText()
-                ScriptManager.load(script, value, sender)
+                ScriptManager.load(script, value, sender, true)
             }
         }
     }
@@ -112,6 +112,10 @@ object DataManager {
             return
         }
         ScriptManager.clear(sender, true)
+        if (ConfigManager.value(Config.DEBUG)) {
+            val result = "Loaded Script"
+            Root.sendInfo(sender, result)
+        }
         readSync(sender)
         readAsync(sender)
     }
@@ -129,7 +133,7 @@ object DataManager {
         )
     }.map(::scriptPath)
 
-    fun scriptPath(script: File) = filePath(script, Resource.SCRIPTS)
+    fun scriptPath(script: File) = filePath(script, Resource.PLUGINS)
 
     fun filePath(script: File, resource: Resource) = script.invariantSeparatorsPath.substring(resource.path().length)
 }

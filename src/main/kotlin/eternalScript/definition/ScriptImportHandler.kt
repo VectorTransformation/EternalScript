@@ -1,7 +1,6 @@
 package eternalScript.definition
 
 import eternalScript.data.Resource
-import eternalScript.extension.toComponent
 import eternalScript.extension.wrap
 import eternalScript.manager.DataManager
 import eternalScript.the.Root
@@ -27,10 +26,10 @@ class ScriptImportHandler : RefineScriptCompilationConfigurationHandler {
 
         annotationList.forEach { import ->
             import.annotation.script.forEach { script ->
-                    val file = Resource.SCRIPTS.child(script)
+                    val file = Resource.PLUGINS.child(script)
 
                     if (!file.exists()) {
-                        Root.info("Script Not Found - ${DataManager.scriptPath(file).wrap()}".toComponent())
+                        Root.info("Script Not Found - ${DataManager.scriptPath(file).wrap()}")
                         return@forEach
                     }
 
