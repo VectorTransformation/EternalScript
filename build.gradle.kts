@@ -42,12 +42,17 @@ val minecraftArgs = listOf(
     "-Daikars.new.flags=true"
 )
 
+repositories {
+    mavenCentral()
+}
+
 dependencies {
     paperweight.paperDevBundle("$minecraftVersion-R0.1-SNAPSHOT")
+    implementation(kotlin("stdlib-jdk8"))
+    implementation(kotlin("reflect"))
     implementation("org.jetbrains.kotlin:kotlin-scripting-jvm")
     implementation("org.jetbrains.kotlin:kotlin-scripting-jvm-host")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation(kotlin("reflect"))
 }
 
 tasks {
@@ -67,6 +72,9 @@ tasks {
     shadowJar {
         archiveClassifier = ""
         archiveVersion = pluginVersion
+        dependencies {
+            exclude(dependency("org.jetbrains:annotations"))
+        }
     }
 }
 
