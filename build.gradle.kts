@@ -7,13 +7,13 @@ plugins {
     // https://github.com/jpenilla/run-task
     id("xyz.jpenilla.run-paper") version "2.3.1"
     // https://github.com/jpenilla/resource-factory
-    id("xyz.jpenilla.resource-factory-paper-convention") version "1.2.0"
+    id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.0"
     // https://github.com/GradleUp/shadow
-    id("com.gradleup.shadow") version "9.0.0-beta13"
+    id("com.gradleup.shadow") version "9.0.0-beta16"
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.1"
+val pluginVersion = "1.0.0"
 val javaVersion = 21
 val minecraftVersion = "1.21.4"
 val minecraftHeapSize = 8
@@ -67,13 +67,6 @@ tasks {
     shadowJar {
         archiveClassifier = ""
         archiveVersion = pluginVersion
-        dependencies {
-            exclude(dependency("org.jetbrains:annotations"))
-        }
-        minimize {
-            exclude(dependency("org.jetbrains.kotlin:kotlin-compiler-embeddable"))
-            exclude(dependency("org.jetbrains.kotlin:kotlin-reflect"))
-        }
     }
 }
 

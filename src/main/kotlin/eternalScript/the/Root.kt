@@ -81,6 +81,8 @@ object Root {
 
     fun onlinePlayers() = Bukkit.getOnlinePlayers()
 
+    fun classLoader(plugin: String) = pluginManager().getPlugin(plugin)?.javaClass?.classLoader
+
     val scope = CoroutineScope(Dispatchers.Default)
 
     val semaphore = Semaphore(20)

@@ -25,13 +25,15 @@ class ScriptParser(kClass: KClass<*>) {
         }
     }
 
-    fun call(script: Script, function: String, vararg args: Any?) {
-        val kFunction = functionCache[function] ?: return
+    fun call(script: Script, function: String, vararg args: Any?): Any? {
+        val kFunction = functionCache[function] ?: return null
 
         if (kFunction.parameters.size == 1) {
-            kFunction.call(script)
+            return kFunction.call(script)
         } else if (args.isNotEmpty()) {
-            kFunction.call(script, *args)
+            return kFunction.call(script, *args)
         }
+
+        return null
     }
 }

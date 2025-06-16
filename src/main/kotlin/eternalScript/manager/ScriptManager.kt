@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.script.experimental.api.ScriptDiagnostic
+import kotlin.script.experimental.api.ScriptEvaluationConfiguration
 import kotlin.script.experimental.api.valueOrNull
 import kotlin.script.experimental.host.toScriptSource
 import kotlin.script.experimental.jvmhost.BasicJvmScriptingHost
@@ -20,11 +21,11 @@ import kotlin.script.experimental.jvmhost.createJvmEvaluationConfigurationFromTe
 
 object ScriptManager {
     private val compilerConfig = createJvmCompilationConfigurationFromTemplate<Script>()
-    private val evaluatorConfig = createJvmEvaluationConfigurationFromTemplate<Script>()
+    private val evaluatorConfigCache = ConcurrentHashMap<String, ScriptEvaluationConfiguration>()
     private val compiler = BasicJvmScriptingHost()
     private val cache = ConcurrentHashMap<String, Pair<Script, ScriptParser>>()
 
-    private fun eval(value: String) = compiler.eval(value.toScriptSource(), compilerConfig, evaluatorConfig)
+    private fun eval(value: String) = compiler.eval(value.toScriptSource(), compilerConfig, evaluatorConfig())
 
     fun load(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
         val unwrap = script.unwrap()
@@ -113,6 +114,13 @@ object ScriptManager {
             "- ${script.wrap()}"
         }.forEach { script ->
             Root.sendInfo(sender, script, false)
+        }
+    }
+
+    fun evaluatorConfig(): ScriptEvaluationConfiguration {
+        val classLoader = ConfigManager.value<String>(Config.CLASS_LOADER)
+        return evaluatorConfigCache.getOrPut(classLoader) {
+            createJvmEvaluationConfigurationFromTemplate<Script>()
         }
     }
 }
