@@ -25,21 +25,21 @@ class MainCommand : CommandBuilder() {
         then(builder("call") {
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
-                    ScriptManager.scripts().filter {
+                    ScriptManager.scripts().map(String::wrap).filter {
                         it.lowercase().startsWith(builder.remainingLowerCase) &&
                                 ScriptManager.functions(it).isNotEmpty()
                     }.forEach {
-                        builder.suggest(it.wrap())
+                        builder.suggest(it)
                     }
                     builder.buildFuture()
                 }
                 then(builder("function", StringArgumentType.string()) {
                     suggests { context, builder ->
                         val script = StringArgumentType.getString(context, "script")
-                        ScriptManager.functions(script).filter {
+                        ScriptManager.functions(script).map(String::wrap).filter {
                             it.lowercase().startsWith(builder.remainingLowerCase)
                         }.forEach {
-                            builder.suggest(it.wrap())
+                            builder.suggest(it)
                         }
                         builder.buildFuture()
                     }
@@ -50,10 +50,10 @@ class MainCommand : CommandBuilder() {
         then(builder("load") {
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
-                    DataManager.scripts().filter {
+                    DataManager.scripts().map(String::wrap).filter {
                         it.lowercase().startsWith(builder.remainingLowerCase)
                     }.forEach {
-                        builder.suggest(it.wrap())
+                        builder.suggest(it)
                     }
                     builder.buildFuture()
                 }
@@ -63,10 +63,10 @@ class MainCommand : CommandBuilder() {
         then(builder("unload") {
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
-                    ScriptManager.scripts().filter {
+                    ScriptManager.scripts().map(String::wrap).filter {
                         it.lowercase().startsWith(builder.remainingLowerCase)
                     }.forEach {
-                        builder.suggest(it.wrap())
+                        builder.suggest(it)
                     }
                     builder.buildFuture()
                 }
