@@ -77,7 +77,7 @@ Control which scripts the plugin processes.
 
 It's quick and easy to get EternalScript up and running on your server:
 
-1.  Download the latest version of **EternalScript** from [Modrinth](https://modrinth.com).
+1.  Download the latest version of **EternalScript** from [Modrinth](https://modrinth.com/plugin/eternalscript).
 2.  Upload the downloaded file to your Minecraft server's `plugins` folder.
 3.  Start or restart your server to load EternalScript.
 
