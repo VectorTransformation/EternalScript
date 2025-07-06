@@ -106,7 +106,7 @@ object DataManager {
     }
 
     fun readAll(sender: CommandSender? = null) {
-        if (job?.isActive == true) {
+        if (isActive()) {
             val result = "Script not loaded yet. Please wait."
             Root.sendInfo(sender, result)
             return
@@ -136,4 +136,6 @@ object DataManager {
     fun scriptPath(script: File) = filePath(script, Resource.PLUGINS)
 
     fun filePath(script: File, resource: Resource) = script.invariantSeparatorsPath.substring(resource.path().length)
+
+    fun isActive() = job?.isActive ?: false
 }
