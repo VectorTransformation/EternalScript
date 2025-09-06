@@ -16,7 +16,7 @@ abstract class Script : Listener {
     val scriptFunction = ScriptFunction()
     val scriptCommand = ScriptCommand()
 
-    fun <T : Any> save(function: String, block: (T) -> Unit) = scriptFunction.save(function, block)
+    inline fun <reified T : Any> save(function: String, noinline block: T.() -> Unit) = scriptFunction.save(function, block)
 
     fun save(function: String, block: () -> Unit) = scriptFunction.save(function, block)
 

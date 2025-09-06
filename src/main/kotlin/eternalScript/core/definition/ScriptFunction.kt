@@ -6,14 +6,14 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
 class ScriptFunction() {
-    private val cache = ConcurrentHashMap<String, ConcurrentLinkedQueue<(Any) -> Unit>>()
+    val cache = ConcurrentHashMap<String, ConcurrentLinkedQueue<(Any) -> Unit>>()
     private val eventCache = ConcurrentHashMap.newKeySet<String>()
 
-    fun <T : Any> save(function: String, block: (T) -> Unit) {
+    inline fun <reified T : Any> save(function: String, noinline block: T.() -> Unit) {
         val queue = cache.getOrPut(function) {
             ConcurrentLinkedQueue()
         }
-        queue.add { block(it as T) }
+        queue.add { (it as T).block() }
     }
 
     fun save(function: String, block: () -> Unit) = save<Unit>(function) { block() }

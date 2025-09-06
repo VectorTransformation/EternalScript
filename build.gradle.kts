@@ -15,9 +15,9 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.0"
+val pluginVersion = "1.0.1"
 val javaVersion = 21
-val minecraftVersion = "1.21.4"
+val minecraftVersion = "1.21.8"
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",

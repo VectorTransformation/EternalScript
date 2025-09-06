@@ -45,7 +45,7 @@ object Root {
         event: Class<T>,
         listener: Listener,
         priority: EventPriority = EventPriority.NORMAL,
-        crossinline block: T.() -> Unit
+        noinline block: T.() -> Unit
     ) = pluginManager().registerEvent(
         event,
         listener,

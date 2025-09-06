@@ -6,6 +6,7 @@ import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.manager.ConfigManager
 import org.bukkit.Bukkit
 import java.io.File
+import java.util.jar.JarEntry
 import java.util.jar.JarFile
 import kotlin.script.experimental.api.ScriptCompilationConfiguration
 import kotlin.script.experimental.api.compilerOptions
@@ -30,9 +31,8 @@ fun ScriptCompilationConfiguration.Builder.importClassPath(list: List<File>) {
     list.forEach { file ->
         JarFile(file).use { jar ->
             val list = jar.entries().asSequence()
-                .map { jarEntry ->
-                    jarEntry.realName
-                }.mapNotNull { realName ->
+                .map(JarEntry::getRealName)
+                .mapNotNull { realName ->
                     if (realName.startsWith("META-INF")) return@mapNotNull null
                     if (realName.startsWith("module-info")) return@mapNotNull null
                     if (!realName.endsWith(".class")) return@mapNotNull null
