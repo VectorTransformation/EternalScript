@@ -1,0 +1,39 @@
+package eternalScript.core.data
+
+import eternalScript.core.extension.*
+import eternalScript.core.the.Root
+import java.io.File
+
+private val dataFolder = Root.dataFolder()
+
+enum class Resource(val file: File) {
+    PLUGINS(dataFolder.parentFile),
+    DATA_FOLDER(dataFolder),
+    SCRIPTS(dataFolder.child("scripts")),
+    CONFIG(dataFolder.child("config.yml")),
+    LIBS(dataFolder.child("libs")),
+    ;
+
+    fun path() = file.invariantSeparatorsPath
+
+    fun child(child: String) = file.child(child)
+
+    fun make() = file.make()
+
+    fun save(content: String) = file.save(content)
+
+    fun save(content: ByteArray) = file.save(content)
+
+    fun searchSequence(
+        fileFilter: (File) -> Boolean = { true }
+    ) = file.searchSequence(fileFilter)
+
+    fun searchAllSequence(
+        fileFilter: (File) -> Boolean = { true },
+        directoryFilter: (File) -> Boolean = { true }
+    ) = file.searchAllSequence(fileFilter, directoryFilter)
+
+    fun clear() = file.clear()
+
+    fun exists() = file.exists()
+}

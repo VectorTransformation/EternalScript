@@ -1,15 +1,17 @@
 plugins {
+    val kotlinVersion = "2.2.10"
+
     `java-library`
     // https://kotlinlang.org/docs/releases.html
-    kotlin("jvm") version "2.1.21"
+    kotlin("jvm") version kotlinVersion
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.17"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.18"
     // https://github.com/jpenilla/run-task
     id("xyz.jpenilla.run-paper") version "2.3.1"
     // https://github.com/jpenilla/resource-factory
     id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.0"
     // https://github.com/GradleUp/shadow
-    id("com.gradleup.shadow") version "9.0.0-beta16"
+    id("com.gradleup.shadow") version "9.1.0"
 }
 
 group = "eternalScript"
