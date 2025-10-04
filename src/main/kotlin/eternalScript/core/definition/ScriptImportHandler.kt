@@ -3,6 +3,7 @@ package eternalScript.core.definition
 import eternalScript.core.data.Resource
 import eternalScript.core.extension.wrap
 import eternalScript.core.manager.DataManager
+import eternalScript.core.manager.LangManager
 import eternalScript.core.the.Root
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.host.toScriptSource
@@ -29,13 +30,16 @@ class ScriptImportHandler : RefineScriptCompilationConfigurationHandler {
                     val file = Resource.PLUGINS.child(script)
 
                     if (!file.exists()) {
-                        Root.info("Script Not Found - ${DataManager.scriptPath(file).wrap()}")
+                        val message =
+                            LangManager.translatable("script.not_found").format(DataManager.scriptPath(file).wrap())
+                        Root.info(message)
                         return@forEach
                     }
 
                     sources.add(file.toScriptSource())
                 }
         }
+
         return ScriptCompilationConfiguration(context.compilationConfiguration) {
             importScripts.append(sources)
         }.asSuccess()

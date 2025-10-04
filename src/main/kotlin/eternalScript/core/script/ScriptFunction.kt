@@ -1,4 +1,4 @@
-package eternalScript.core.definition
+package eternalScript.core.script
 
 import eternalScript.core.data.ScriptLifecycle
 import eternalScript.core.the.Root

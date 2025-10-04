@@ -1,8 +1,9 @@
 package eternalScript.core.the
 
-import eternalScript.api.manager.Manager
 import eternalScript.EternalScript
 import eternalScript.api.command.CommandBuilder
+import eternalScript.api.manager.Manager
+import eternalScript.core.extension.tag
 import eternalScript.core.extension.toComponent
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CoroutineScope
@@ -58,29 +59,20 @@ object Root {
 
     fun componentLogger() = instance().componentLogger
 
-    fun send(sender: Player, message: String, origin: Boolean = true) {
-        val hex = "<#EC9800>"
-        if (origin) {
-            sender.sendMessage("$hex[$ORIGIN] $message".toComponent())
-        } else {
-            sender.sendMessage("$hex$message".toComponent())
-        }
+    fun namespace() = "<gray>[${ORIGIN.tag(listOf("gold"))}]</gray>"
+
+    fun send(sender: CommandSender?, message: String) {
+        if (sender !is Player) return
+        sender.sendMessage("${namespace()} $message".toComponent())
     }
 
-    fun info(message: String, origin: Boolean = true) {
-        if (origin) {
-            componentLogger().info(message.toComponent())
-        } else {
-            Bukkit.getLogger().info(message)
-        }
+    fun info(message: String) {
+        componentLogger().info(message.toComponent())
     }
 
-    fun sendInfo(sender: CommandSender?, message: String, origin: Boolean = true) {
-        if (sender is Player) {
-            send(sender, message, origin)
-        } else {
-            info(message, origin)
-        }
+    fun sendInfo(sender: CommandSender?, message: String) {
+        send(sender, message)
+        componentLogger().info(message)
     }
 
     fun scheduler() = Bukkit.getScheduler()

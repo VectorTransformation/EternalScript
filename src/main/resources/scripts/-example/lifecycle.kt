@@ -3,6 +3,7 @@
  * lifecycle
  *
  */
+
 enable {
     // This code runs when the script is loaded/enabled.
     Bukkit.broadcastMessage("Eternal Script: Script loaded!")

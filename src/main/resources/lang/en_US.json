@@ -1,0 +1,9 @@
+{
+  "config.reload": "Reloads the configuration",
+  "script.loaded": "Script loading complete",
+  "script.format": "- %s",
+  "script.wait": "Loading scripts. Please wait a moment.",
+  "script.unloaded": "Script unloaded",
+  "script.list": "Script list",
+  "script.not_found": "Script '%s' not found"
+}

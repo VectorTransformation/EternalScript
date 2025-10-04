@@ -1,4 +1,4 @@
-package eternalScript.core.definition
+package eternalScript.core.script
 
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction

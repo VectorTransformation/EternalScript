@@ -13,6 +13,7 @@ import org.bukkit.command.CommandSender
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import kotlin.io.path.invariantSeparatorsPathString
 
 object DataManager : Manager {
     private val EXTENSION = listOf("kt", "kts")
@@ -29,15 +30,32 @@ object DataManager : Manager {
             Resource.LIBS
         ).forEach(Resource::make)
 
-        val scripts = Resource.SCRIPTS
-        if (!scripts.exists()) {
+        listOf(
+            Resource.SCRIPTS,
+            Resource.UTILS
+        ).forEach { resource ->
+            saveResource(resource, *EXTENSION.toTypedArray())
+        }
+
+        listOf(
+            Resource.LANG
+        ).forEach { resource ->
+            saveResource(resource, "json")
+        }
+
+        Root.register(ReloadManager)
+    }
+
+    fun saveResource(resource: Resource, vararg extension: String) {
+        if (!resource.exists()) {
             val jarPath = javaClass.protectionDomain.codeSource.location.path
+            val fileName = resource.file.nameWithoutExtension
             ZipFile(jarPath).use { jar ->
                 jar.entries()
                     .asSequence()
                     .map(ZipEntry::getName)
                     .filter { name ->
-                        name.startsWith("scripts") && (name.endsWith("kt") || name.endsWith("kts"))
+                        name.startsWith(fileName) && extension.any(name::endsWith)
                     }.forEach { name ->
                         Root.instance().saveResource(name, false)
                     }
@@ -108,14 +126,12 @@ object DataManager : Manager {
 
     fun readAll(sender: CommandSender? = null) {
         if (isActive()) {
-            val result = "Script not loaded yet. Please wait."
-            Root.sendInfo(sender, result)
+            LangManager.sendMessage(sender, "script.wait")
             return
         }
         ScriptManager.clear(sender, true)
         if (ConfigManager.value(Config.DEBUG)) {
-            val result = "Loaded Script"
-            Root.sendInfo(sender, result)
+            LangManager.sendMessage(sender, "script.loaded")
         }
         readSync(sender)
         readAsync(sender)
@@ -134,9 +150,25 @@ object DataManager : Manager {
         )
     }.map(::scriptPath)
 
-    fun scriptPath(script: File) = filePath(script, Resource.PLUGINS)
+    fun utils() = ConfigManager.value<List<String>>(Config.UTILS).flatMap { util ->
+        Resource.PLUGINS.child(util).searchAllSequence(
+            { file ->
+                val name = file.name
+                !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION
+            },
+            { file ->
+                val name = file.name
+                !ScriptPrefix.IGNORE.check(name)
+            }
+        )
+    }.joinToString("\n") { util ->
+        "@file:Import(\"${scriptPath(util)}\")"
+    }.plus("\n")
 
-    fun filePath(script: File, resource: Resource) = script.invariantSeparatorsPath.substring(resource.path().length)
+    fun scriptPath(script: File) = relativize(script, Resource.PLUGINS)
+
+    fun relativize(file: File, resource: Resource) =
+        resource.file.toPath().relativize(file.toPath()).invariantSeparatorsPathString
 
     fun isActive() = job?.isActive ?: false
 }

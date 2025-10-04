@@ -1,4 +1,4 @@
-package eternalScript.core.definition
+package eternalScript.core.script
 
 import eternalScript.core.data.ScriptLifecycle
 import eternalScript.core.manager.ScriptManager
@@ -6,12 +6,7 @@ import eternalScript.core.the.Root
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
-import kotlin.script.experimental.annotations.KotlinScript
 
-@KotlinScript(
-    compilationConfiguration = ScriptCompilerConfig::class,
-    evaluationConfiguration = ScriptEvaluatorConfig::class
-)
 abstract class Script : Listener {
     val scriptFunction = ScriptFunction()
     val scriptCommand = ScriptCommand()
@@ -19,6 +14,8 @@ abstract class Script : Listener {
     inline fun <reified T : Any> save(function: String, noinline block: T.() -> Unit) = scriptFunction.save(function, block)
 
     fun save(function: String, block: () -> Unit) = scriptFunction.save(function, block)
+
+    fun save(lifecycle: ScriptLifecycle, block: () -> Unit) = save(lifecycle.function, block)
 
     fun <T : Any> call(script: Script, function: String, arg: T) = scriptFunction.call(script, function, arg)
 
@@ -28,11 +25,13 @@ abstract class Script : Listener {
 
     fun call(function: String) = call(this, function)
 
+    fun call(lifecycle: ScriptLifecycle) = call(lifecycle.function)
+
     // lifecycle
 
-    fun enable(block: () -> Unit) = save(ScriptLifecycle.ENABLE.function, block)
+    fun enable(block: () -> Unit) = save(ScriptLifecycle.ENABLE, block)
 
-    fun disable(block: () -> Unit) = save(ScriptLifecycle.DISABLE.function, block)
+    fun disable(block: () -> Unit) = save(ScriptLifecycle.DISABLE, block)
 
     // event
 

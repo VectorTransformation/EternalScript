@@ -4,14 +4,12 @@ import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.manager.ConfigManager
+import eternalScript.core.script.Script
 import org.bukkit.Bukkit
 import java.io.File
 import java.util.jar.JarEntry
 import java.util.jar.JarFile
-import kotlin.script.experimental.api.ScriptCompilationConfiguration
-import kotlin.script.experimental.api.compilerOptions
-import kotlin.script.experimental.api.defaultImports
-import kotlin.script.experimental.api.refineConfiguration
+import kotlin.script.experimental.api.*
 import kotlin.script.experimental.jvm.jvm
 import kotlin.script.experimental.jvm.updateClasspath
 import kotlin.script.experimental.jvm.util.classpathFromClassloader
@@ -52,6 +50,10 @@ fun ScriptCompilationConfiguration.Builder.importClassPath(list: List<File>) {
 }
 
 class ScriptCompilerConfig : ScriptCompilationConfiguration({
+    baseClass(Script::class)
+
+    isStandalone(false)
+
     jvm {
         updateClasspath(classPath)
 

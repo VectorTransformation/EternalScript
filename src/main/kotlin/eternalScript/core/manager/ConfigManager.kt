@@ -1,25 +1,16 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.Manager
+import eternalScript.api.manager.Reloader
 import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
-import eternalScript.core.the.Root
 import org.bukkit.command.CommandSender
 import org.bukkit.configuration.file.YamlConfiguration
 import java.io.File
 
-object ConfigManager : Manager {
+object ConfigManager : Reloader {
     private val cache = mutableMapOf<String, Any>()
 
-    override fun register() {
-        reload()
-    }
-
-    fun reload(sender: CommandSender? = null, silent: Boolean = true) {
-        load(sender, silent)
-    }
-
-    private fun load(sender: CommandSender? = null, silent: Boolean = true) {
+    override fun reload(sender: CommandSender?, silent: Boolean) {
         val file = Resource.CONFIG.make()
         val map = Config.entries.associate {
             it.key to Pair(it.value, it.comment)
@@ -38,8 +29,7 @@ object ConfigManager : Manager {
             }
         }
         if (!silent) {
-            val result = "Config Reloaded"
-            Root.sendInfo(sender, result)
+            LangManager.sendMessage(sender, "config.reload")
         }
     }
 

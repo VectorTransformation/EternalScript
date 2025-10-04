@@ -3,8 +3,9 @@
  * Hello, world!
  *
  */
+
 enable {
-    Bukkit.broadcastMessage("Hello, world!")
+    hello() // utils/util.kt
 }
 
 event<PlayerJoinEvent> { event ->

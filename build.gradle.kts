@@ -1,23 +1,26 @@
 plugins {
-    val kotlinVersion = "2.2.10"
+    val kotlinVersion = "2.2.20"
 
     `java-library`
     // https://kotlinlang.org/docs/releases.html
     kotlin("jvm") version kotlinVersion
+    // https://github.com/Kotlin/kotlinx.serialization
+    kotlin("plugin.serialization") version kotlinVersion
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.18"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
     // https://github.com/jpenilla/run-task
-    id("xyz.jpenilla.run-paper") version "2.3.1"
+    id("xyz.jpenilla.run-paper") version "3.0.0"
     // https://github.com/jpenilla/resource-factory
-    id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.0"
+    id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.1"
     // https://github.com/GradleUp/shadow
-    id("com.gradleup.shadow") version "9.1.0"
+    id("com.gradleup.shadow") version "9.2.2"
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.1"
+val pluginVersion = "1.0.2"
 val javaVersion = 21
-val minecraftVersion = "1.21.8"
+val pluginApiVersion = "1.21.8"
+val minecraftVersion = "1.21.9"
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -52,6 +55,7 @@ dependencies {
     paperweight.paperDevBundle("$minecraftVersion-R0.1-SNAPSHOT")
     implementation(kotlin("stdlib-jdk8"))
     implementation(kotlin("reflect"))
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("org.jetbrains.kotlin:kotlin-scripting-jvm")
     implementation("org.jetbrains.kotlin:kotlin-scripting-jvm-host")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
@@ -66,14 +70,14 @@ tasks {
         options.release = javaVersion
     }
     assemble {
-        dependsOn("shadowJar")
+        dependsOn(shadowJar)
     }
     jar {
         enabled = false
     }
     shadowJar {
         archiveClassifier = ""
-        archiveVersion = pluginVersion
+        archiveVersion = pluginVersion()
         dependencies {
             exclude(dependency("org.jetbrains:annotations"))
         }
@@ -91,6 +95,8 @@ kotlin {
 paperPluginYaml {
     name = rootProject.name
     main = "$group.${rootProject.name}"
-    version = pluginVersion.let { it.ifEmpty { "1.0.0" } }
-    apiVersion = minecraftVersion
+    version = pluginVersion()
+    apiVersion = pluginApiVersion
 }
+
+fun pluginVersion() = pluginVersion.let { it.ifEmpty { "1.0.0" } }

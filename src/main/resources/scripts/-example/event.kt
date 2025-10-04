@@ -3,6 +3,7 @@
  * event
  *
  */
+
 event<PlayerJoinEvent> { event ->
     Bukkit.broadcastMessage("${event.player.name} joined the server!")
 }

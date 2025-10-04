@@ -12,6 +12,8 @@ enum class Resource(val file: File) {
     SCRIPTS(dataFolder.child("scripts")),
     CONFIG(dataFolder.child("config.yml")),
     LIBS(dataFolder.child("libs")),
+    UTILS(dataFolder.child("utils")),
+    LANG(dataFolder.child("lang")),
     ;
 
     fun path() = file.invariantSeparatorsPath

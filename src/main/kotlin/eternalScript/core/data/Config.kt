@@ -8,13 +8,19 @@ enum class Config(
     val comment: List<String> = emptyList()
 ) {
     CLASS_LOADER("class-loader", Root.ORIGIN),
-    DEBUG("debug", false),
+    DEBUG("debug", true),
     LIBS("libs", listOf(
         "${Root.ORIGIN}/libs",
     )),
     SCRIPTS("scripts", listOf(
         "${Root.ORIGIN}/scripts",
     )),
+    UTILS(
+        "utils", listOf(
+            "${Root.ORIGIN}/utils",
+        )
+    ),
     METRICS("metrics", true),
+    LANG("lang", "en_US")
     ;
 }
