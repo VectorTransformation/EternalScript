@@ -10,6 +10,7 @@ import eternalScript.core.extension.toTranslatable
 import eternalScript.core.extension.unwrap
 import eternalScript.core.extension.wrap
 import eternalScript.core.script.Script
+import eternalScript.core.script.ScriptData
 import eternalScript.core.script.ScriptParser
 import eternalScript.core.the.Root
 import io.papermc.paper.registry.RegistryKey
@@ -36,7 +37,7 @@ object ScriptManager {
     private val compilerConfig = createJvmCompilationConfigurationFromTemplate<ScriptDefinition>()
     private val evaluatorConfigCache = ConcurrentHashMap<String, ScriptEvaluationConfiguration>()
     private val compiler = BasicJvmScriptingHost()
-    private val cache = ConcurrentHashMap<String, Pair<Script, ScriptParser>>()
+    private val cache = ConcurrentHashMap<String, ScriptData>()
 
     private fun eval(value: String): ResultWithDiagnostics<EvaluationResult> {
         val script = DataManager.utils() + value
@@ -62,7 +63,7 @@ object ScriptManager {
 
         remove(unwrap, silent = true)
 
-        cache[unwrap] = returnValue to ScriptParser(returnValue::class)
+        cache[unwrap] = ScriptData(returnValue, ScriptParser(returnValue::class))
 
         if (ConfigManager.value(Config.DEBUG)) {
             if (!isCompile) {
@@ -96,7 +97,7 @@ object ScriptManager {
     fun remove(key: String, sender: CommandSender? = null, silent: Boolean = false, isClear: Boolean = false) {
         val unwrap = key.unwrap()
 
-        cache[unwrap]?.first?.call(ScriptLifecycle.DISABLE)
+        cache[unwrap]?.script?.call(ScriptLifecycle.DISABLE)
 
         cache.remove(unwrap)
 
@@ -114,10 +115,10 @@ object ScriptManager {
 
     fun script(script: String) = cache[script]
 
-    fun functions(script: String) = cache[script]?.second?.functionCache?.filterValues { it.parameters.size == 1 }?.keys ?: emptyList()
+    fun functions(script: String) = cache[script]?.scriptParser?.functionCache?.filterValues { it.parameters.size == 1 }?.keys ?: emptyList()
 
-    fun call(script: String, function: String, vararg args: Any?) = script(script.unwrap())?.let {
-        it.second.call(it.first, function.unwrap(), *args)
+    fun call(script: String, function: String, vararg args: Any?) = script(script.unwrap())?.let { data ->
+        data.scriptParser.call(data.script, function.unwrap(), *args)
     }
 
     fun scriptList(sender: CommandSender? = null) {
