@@ -77,7 +77,13 @@ object Root {
 
     fun scheduler() = Bukkit.getScheduler()
 
-    fun runTask(task: Consumer<BukkitTask>) = scheduler().runTask(instance(), task)
+    fun runTask(task: Consumer<BukkitTask>) {
+        val instance = instance()
+        if (!instance.isEnabled) return
+        scheduler().runTask(instance, task)
+    }
+
+    fun cancelTasks() = scheduler().cancelTasks(instance())
 
     fun onlinePlayers() = Bukkit.getOnlinePlayers()
 

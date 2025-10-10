@@ -17,10 +17,10 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.2"
+val pluginVersion = "1.0.3"
 val javaVersion = 21
 val pluginApiVersion = "1.21.8"
-val minecraftVersion = "1.21.9"
+val minecraftVersion = "1.21.10"
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -53,12 +53,12 @@ repositories {
 
 dependencies {
     paperweight.paperDevBundle("$minecraftVersion-R0.1-SNAPSHOT")
-    implementation(kotlin("stdlib-jdk8"))
-    implementation(kotlin("reflect"))
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
-    implementation("org.jetbrains.kotlin:kotlin-scripting-jvm")
-    implementation("org.jetbrains.kotlin:kotlin-scripting-jvm-host")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    compileOnly(kotlin("stdlib-jdk8"))
+    compileOnly(kotlin("reflect"))
+    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    compileOnly(kotlin("scripting-jvm"))
+    implementation(kotlin("scripting-jvm-host"))
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 }
 
 tasks {
@@ -94,9 +94,12 @@ kotlin {
 
 paperPluginYaml {
     name = rootProject.name
-    main = "$group.${rootProject.name}"
+    main = pluginMain()
     version = pluginVersion()
     apiVersion = pluginApiVersion
+    loader = "${pluginMain()}Loader"
 }
+
+fun pluginMain() = "$group.${rootProject.name}"
 
 fun pluginVersion() = pluginVersion.let { it.ifEmpty { "1.0.0" } }
