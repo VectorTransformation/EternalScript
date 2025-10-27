@@ -28,8 +28,7 @@ class MainCommand : CommandBuilder() {
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
                     ScriptManager.scripts().map(String::wrap).filter {
-                        it.lowercase().startsWith(builder.remainingLowerCase) &&
-                                ScriptManager.functions(it).isNotEmpty()
+                        it.lowercase().startsWith(builder.remainingLowerCase)
                     }.forEach {
                         builder.suggest(it)
                     }
