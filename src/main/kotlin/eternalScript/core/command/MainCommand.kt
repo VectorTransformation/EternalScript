@@ -9,7 +9,9 @@ import eternalScript.core.extension.wrap
 import eternalScript.core.manager.DataManager
 import eternalScript.core.manager.ReloadManager
 import eternalScript.core.manager.ScriptManager
+import eternalScript.core.the.Root
 import io.papermc.paper.command.brigadier.CommandSourceStack
+import kotlinx.coroutines.launch
 import org.bukkit.entity.Player
 
 class MainCommand : CommandBuilder() {
@@ -124,9 +126,11 @@ class MainCommand : CommandBuilder() {
     fun load(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
         if (script !in DataManager.scripts()) return Command.SINGLE_SUCCESS
-        val value = Resource.PLUGINS.child(script).readText()
-        val sender = context.source.sender
-        ScriptManager.load(script, value, sender)
+        Root.scope.launch {
+            val value = Resource.PLUGINS.child(script).readText()
+            val sender = context.source.sender
+            DataManager.loadAsync(script, value, sender)
+        }
         return Command.SINGLE_SUCCESS
     }
 

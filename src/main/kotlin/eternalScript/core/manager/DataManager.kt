@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import kotlin.io.path.invariantSeparatorsPathString
@@ -18,6 +19,7 @@ import kotlin.io.path.invariantSeparatorsPathString
 object DataManager : Manager {
     private val EXTENSION = listOf("kt", "kts")
     private var job: Job? = null
+    private val scriptLock = ConcurrentHashMap.newKeySet<String>()
 
     override fun register() {
         makeAll()
@@ -84,15 +86,30 @@ object DataManager : Manager {
                 )
             }.forEach { file ->
                 launch {
-                    Root.semaphore.withPermit {
-                        runCatching {
-                            val script = scriptPath(file)
-                            val value = file.readText()
-                            ScriptManager.load(script, value, sender, true)
-                        }
-                    }
+                    val script = scriptPath(file)
+                    val value = file.readText()
+                    loadAsync(script, value, sender, true)
                 }
             }
+        }
+    }
+
+    suspend fun loadAsync(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
+        if (scriptLock.contains(script)) {
+            LangManager.sendMessage(sender, "script.wait")
+            return
+        }
+
+        scriptLock.add(script)
+
+        try {
+            Root.semaphore.withPermit {
+                runCatching {
+                    ScriptManager.load(script, value, sender, isCompile)
+                }
+            }
+        } finally {
+            scriptLock.remove(script)
         }
     }
 
@@ -116,11 +133,26 @@ object DataManager : Manager {
                 }
             )
         }.forEach { file ->
+            val script = scriptPath(file)
+            val value = file.readText()
+            loadSync(script, value, sender, true)
+        }
+    }
+
+    fun loadSync(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
+        if (scriptLock.contains(script)) {
+            LangManager.sendMessage(sender, "script.wait")
+            return
+        }
+
+        scriptLock.add(script)
+
+        try {
             runCatching {
-                val script = scriptPath(file)
-                val value = file.readText()
-                ScriptManager.load(script, value, sender, true)
+                ScriptManager.load(script, value, sender, isCompile)
             }
+        } finally {
+            scriptLock.remove(script)
         }
     }
 
