@@ -3,7 +3,8 @@ package eternalScript.core.manager
 import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.data.ScriptLifecycle
-import eternalScript.core.definition.ScriptDefinition
+import eternalScript.core.definition.ScriptCompilerConfig
+import eternalScript.core.definition.ScriptEvaluatorConfig
 import eternalScript.core.dialog.CustomDialog
 import eternalScript.core.extension.toComponent
 import eternalScript.core.extension.toTranslatable
@@ -30,11 +31,9 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.host.toScriptSource
 import kotlin.script.experimental.jvmhost.BasicJvmScriptingHost
-import kotlin.script.experimental.jvmhost.createJvmCompilationConfigurationFromTemplate
-import kotlin.script.experimental.jvmhost.createJvmEvaluationConfigurationFromTemplate
 
 object ScriptManager {
-    private val compilerConfig = createJvmCompilationConfigurationFromTemplate<ScriptDefinition>()
+    private val compilerConfig = ScriptCompilerConfig()
     private val evaluatorConfigCache = ConcurrentHashMap<String, ScriptEvaluationConfiguration>()
     private val compiler = BasicJvmScriptingHost()
     private val cache = ConcurrentHashMap<String, ScriptData>()
@@ -59,11 +58,11 @@ object ScriptManager {
             }
         }
 
-        val returnValue = result.valueOrNull()?.returnValue?.scriptInstance as? Script ?: return
+        val scriptInstance = result.valueOrNull()?.returnValue?.scriptInstance as? Script ?: return
 
         remove(unwrap, silent = true)
 
-        cache[unwrap] = ScriptData(returnValue, ScriptParser(returnValue::class))
+        cache[unwrap] = ScriptData(scriptInstance, ScriptParser(scriptInstance::class))
 
         if (ConfigManager.value(Config.DEBUG)) {
             if (!isCompile) {
@@ -72,7 +71,7 @@ object ScriptManager {
             LangManager.sendMessage(sender, "script.format", args = listOf(unwrap.wrap()))
         }
 
-        returnValue.call(ScriptLifecycle.ENABLE)
+        scriptInstance.scriptFunction.call(scriptInstance, ScriptLifecycle.ENABLE)
     }
 
     fun clear(sender: CommandSender? = null, silent: Boolean = false) {
@@ -97,7 +96,9 @@ object ScriptManager {
     fun remove(key: String, sender: CommandSender? = null, silent: Boolean = false, isClear: Boolean = false) {
         val unwrap = key.unwrap()
 
-        cache[unwrap]?.script?.call(ScriptLifecycle.DISABLE)
+        cache[unwrap]?.script?.let { script ->
+            script.scriptFunction.call(script, ScriptLifecycle.DISABLE)
+        }
 
         cache.remove(unwrap)
 
@@ -166,7 +167,7 @@ object ScriptManager {
     fun evaluatorConfig(): ScriptEvaluationConfiguration {
         val classLoader = ConfigManager.value<String>(Config.CLASS_LOADER)
         return evaluatorConfigCache.getOrPut(classLoader) {
-            createJvmEvaluationConfigurationFromTemplate<ScriptDefinition>()
+            ScriptEvaluatorConfig()
         }
     }
 }

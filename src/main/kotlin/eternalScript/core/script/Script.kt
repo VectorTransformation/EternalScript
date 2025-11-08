@@ -7,55 +7,37 @@ import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 
-abstract class Script : Listener {
+abstract class Script {
     val scriptFunction = ScriptFunction()
     val scriptCommand = ScriptCommand()
+    val scriptListener = object : Listener {
 
-    inline fun <reified T : Any> save(function: String, noinline block: T.() -> Unit) = scriptFunction.save(function, block)
-
-    fun save(function: String, block: () -> Unit) = scriptFunction.save(function, block)
-
-    fun save(lifecycle: ScriptLifecycle, block: () -> Unit) = save(lifecycle.function, block)
-
-    fun <T : Any> call(script: Script, function: String, arg: T) = scriptFunction.call(script, function, arg)
-
-    fun call(script: Script, function: String) = scriptFunction.call(script, function)
-
-    fun <T : Any> call(function: String, arg: T) = call(this, function, arg)
-
-    fun call(function: String) = call(this, function)
-
-    fun call(lifecycle: ScriptLifecycle) = call(lifecycle.function)
+    }
 
     // lifecycle
 
-    fun enable(block: () -> Unit) = save(ScriptLifecycle.ENABLE, block)
+    fun enable(block: () -> Unit) {
+        scriptFunction.save(ScriptLifecycle.ENABLE, block)
+    }
 
-    fun disable(block: () -> Unit) = save(ScriptLifecycle.DISABLE, block)
+    fun disable(block: () -> Unit) {
+        scriptFunction.save(ScriptLifecycle.DISABLE, block)
+    }
 
     // event
 
-    inline fun <reified T : Event> event(priority: EventPriority = EventPriority.NORMAL, noinline block: (T) -> Unit) {
-        val event = T::class.java
-        val function = event.name
-        val hasEvent = scriptFunction.hasEvent(function)
-
-        save(function, block)
-
-        if (hasEvent) return
-
-        scriptFunction.addEvent(function)
-
-        Root.register(event, this, priority) {
-            call(function, this)
-        }
+    inline fun <reified T : Event> event(
+        priority: EventPriority = EventPriority.NORMAL,
+        noinline block: (T) -> Unit
+    ) {
+        Root.register(T::class.java, scriptListener, priority, block)
     }
 
     // command
 
     fun command(name: String, block: ScriptCommandBuilder.() -> Unit) {
         val builder = ScriptCommandBuilder(name).apply(block)
-        scriptCommand.register(
+        scriptCommand.addCommand(
             builder.name,
             builder.aliases,
             builder.permission,

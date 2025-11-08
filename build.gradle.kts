@@ -1,23 +1,19 @@
 plugins {
-    val kotlinVersion = "2.2.20"
-
     `java-library`
     // https://kotlinlang.org/docs/releases.html
-    kotlin("jvm") version kotlinVersion
+    kotlin("jvm")
     // https://github.com/Kotlin/kotlinx.serialization
-    kotlin("plugin.serialization") version kotlinVersion
+    kotlin("plugin.serialization")
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
     // https://github.com/jpenilla/run-task
     id("xyz.jpenilla.run-paper") version "3.0.0"
     // https://github.com/jpenilla/resource-factory
     id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.1"
-    // https://github.com/GradleUp/shadow
-    id("com.gradleup.shadow") version "9.2.2"
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.4"
+val pluginVersion = "1.0.5"
 val javaVersion = 21
 val pluginApiVersion = "1.21.8"
 val minecraftVersion = "1.21.10"
@@ -46,6 +42,7 @@ val minecraftArgs = listOf(
     "-Dusing.aikars.flags=https://mcflags.emc.gs",
     "-Daikars.new.flags=true"
 )
+val kotlinVersion: String by project
 
 repositories {
     mavenCentral()
@@ -53,12 +50,33 @@ repositories {
 
 dependencies {
     paperweight.paperDevBundle("$minecraftVersion-R0.1-SNAPSHOT")
-    compileOnly(kotlin("stdlib-jdk8"))
-    compileOnly(kotlin("reflect"))
+    compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
+    compileOnly(kotlin("reflect", kotlinVersion))
     compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
-    compileOnly(kotlin("scripting-jvm"))
-    implementation(kotlin("scripting-jvm-host"))
+    compileOnly(kotlin("scripting-jvm", kotlinVersion))
+    compileOnly(kotlin("scripting-jvm-host", kotlinVersion))
     compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+}
+
+fun libraries(): String {
+    val compileOnly = project.configurations.getByName("compileOnly").dependencies
+
+    val library = compileOnly.mapNotNull { dependency ->
+        val group = dependency.group ?: return@mapNotNull null
+        val name = dependency.name
+        val version = dependency.version ?: return@mapNotNull null
+
+        "  - $group:$name:$version"
+    }.joinToString("\n", "\n")
+
+    return "libraries:$library"
+}
+
+fun addLibraries() {
+    val paperPluginYml = layout.buildDirectory.file("resources/main/paper-plugin.yml").get().asFile
+    if (!paperPluginYml.exists()) return
+
+    paperPluginYml.writeText(paperPluginYml.readText().plus(libraries()))
 }
 
 tasks {
@@ -66,21 +84,16 @@ tasks {
         minecraftVersion(minecraftVersion)
         jvmArgs(minecraftArgs)
     }
+    processResources {
+        doLast {
+            addLibraries()
+        }
+    }
     compileJava {
         options.release = javaVersion
     }
-    assemble {
-        dependsOn(shadowJar)
-    }
     jar {
-        enabled = false
-    }
-    shadowJar {
-        archiveClassifier = ""
-        archiveVersion = pluginVersion()
-        dependencies {
-            exclude(dependency("org.jetbrains:annotations"))
-        }
+        version = pluginVersion()
     }
 }
 

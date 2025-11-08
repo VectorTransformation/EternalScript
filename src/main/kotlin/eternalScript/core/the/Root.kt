@@ -16,8 +16,6 @@ import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.HandlerList
 import org.bukkit.event.Listener
-import org.bukkit.scheduler.BukkitTask
-import java.util.function.Consumer
 
 object Root {
     const val ORIGIN = "EternalScript"
@@ -26,21 +24,7 @@ object Root {
 
     fun pluginManager() = Bukkit.getPluginManager()
 
-    private fun registerEvents(listener: Listener) = pluginManager().registerEvents(listener, instance())
-
-    fun register(vararg listener: Listener) = listener.forEach(::registerEvents)
-
-    fun unregister(vararg listener: Listener) = listener.forEach(HandlerList::unregisterAll)
-
-    fun lifecycleManager() = instance().lifecycleManager
-
-    private fun registerEventHandler(commandBuilder: CommandBuilder) = lifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS) { handler ->
-        handler.registrar().register(commandBuilder.builder.build(), commandBuilder.description, commandBuilder.aliases)
-    }
-
-    fun register(vararg commandBuilder: CommandBuilder) = commandBuilder.forEach(::registerEventHandler)
-
-    fun register(vararg manager: Manager) = manager.forEach(Manager::register)
+    // event
 
     inline fun <reified T : Event> register(
         event: Class<T>,
@@ -54,6 +38,22 @@ object Root {
         { _, executor -> (executor as T).block() },
         instance()
     )
+
+    fun unregister(vararg listener: Listener) = listener.forEach(HandlerList::unregisterAll)
+
+    // command
+
+    fun lifecycleManager() = instance().lifecycleManager
+
+    private fun registerEventHandler(commandBuilder: CommandBuilder) = lifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS) { handler ->
+        handler.registrar().register(commandBuilder.builder.build(), commandBuilder.description, commandBuilder.aliases)
+    }
+
+    // util
+
+    fun register(vararg commandBuilder: CommandBuilder) = commandBuilder.forEach(::registerEventHandler)
+
+    fun register(vararg manager: Manager) = manager.forEach(Manager::register)
 
     fun dataFolder() = instance().dataFolder
 
@@ -74,16 +74,6 @@ object Root {
         send(sender, message)
         componentLogger().info(message)
     }
-
-    fun scheduler() = Bukkit.getScheduler()
-
-    fun runTask(task: Consumer<BukkitTask>) {
-        val instance = instance()
-        if (!instance.isEnabled) return
-        scheduler().runTask(instance, task)
-    }
-
-    fun cancelTasks() = scheduler().cancelTasks(instance())
 
     fun onlinePlayers() = Bukkit.getOnlinePlayers()
 

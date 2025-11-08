@@ -3,32 +3,35 @@ package eternalScript;
 import io.papermc.paper.plugin.loader.PluginClasspathBuilder;
 import io.papermc.paper.plugin.loader.PluginLoader;
 import io.papermc.paper.plugin.loader.library.impl.MavenLibraryResolver;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.graph.Dependency;
 import org.eclipse.aether.repository.RemoteRepository;
 
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+
 public class EternalScriptLoader implements PluginLoader {
-    private final String kotlinVersion = "2.2.20";
+    private final MavenLibraryResolver resolver = new MavenLibraryResolver();
+    private final RemoteRepository repository = new RemoteRepository.Builder("central", "default", MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR).build();
 
     @Override
-    public void classloader(PluginClasspathBuilder classpathBuilder) {
-        implementation(classpathBuilder, kotlin("stdlib-jdk8"));
-        implementation(classpathBuilder, kotlin("reflect"));
-        implementation(classpathBuilder, "org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0");
-        implementation(classpathBuilder, kotlin("scripting-jvm"));
-        implementation(classpathBuilder, kotlin("scripting-jvm-host"));
-        implementation(classpathBuilder, "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2");
+    public void classloader(PluginClasspathBuilder builder) {
+        try (
+            var stream = getClass().getResourceAsStream("/paper-plugin.yml");
+            var reader = stream == null ? null : new InputStreamReader(stream, StandardCharsets.UTF_8)
+        ) {
+            if (reader == null) return;
+            var paperPluginYml = YamlConfiguration.loadConfiguration(reader);
+            paperPluginYml.getStringList("libraries").forEach(this::addDependency);
+            resolver.addRepository(repository);
+            builder.addLibrary(resolver);
+        } catch (Exception e) {
+
+        }
     }
 
-    private void implementation(PluginClasspathBuilder classpathBuilder, String artifact) {
-        var resolver = new MavenLibraryResolver();
+    private void addDependency(String artifact) {
         resolver.addDependency(new Dependency(new DefaultArtifact(artifact), null));
-        var repository = new RemoteRepository.Builder("central", "default", MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR).build();
-        resolver.addRepository(repository);
-        classpathBuilder.addLibrary(resolver);
-    }
-
-    private String kotlin(String artifact) {
-        return "org.jetbrains.kotlin:kotlin-" + artifact + ":" + kotlinVersion;
     }
 }
