@@ -7,13 +7,13 @@ plugins {
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
     // https://github.com/jpenilla/run-task
-    id("xyz.jpenilla.run-paper") version "3.0.0"
+    id("xyz.jpenilla.run-paper") version "3.0.2"
     // https://github.com/jpenilla/resource-factory
     id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.1"
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.5"
+val pluginVersion = "1.0.6"
 val javaVersion = 21
 val pluginApiVersion = "1.21.8"
 val minecraftVersion = "1.21.10"
@@ -111,6 +111,7 @@ paperPluginYaml {
     version = pluginVersion()
     apiVersion = pluginApiVersion
     loader = "${pluginMain()}Loader"
+    foliaSupported = true
 }
 
 fun pluginMain() = "$group.${rootProject.name}"

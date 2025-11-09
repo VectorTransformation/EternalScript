@@ -30,19 +30,14 @@ fun ScriptCompilationConfiguration.Builder.importClassPath(list: List<File>) {
         JarFile(file).use { jar ->
             val list = jar.entries().asSequence()
                 .map(JarEntry::getRealName)
-                .mapNotNull { realName ->
-                    if (realName.startsWith("META-INF")) return@mapNotNull null
-                    if (realName.startsWith("module-info")) return@mapNotNull null
-                    if (!realName.endsWith(".class")) return@mapNotNull null
-
-                    val name = realName
-                        .substringBeforeLast("/", "")
-                        .replace("/", ".")
-
-                    if (name.isEmpty()) return@mapNotNull realName.removeSuffix(".class")
-
-                    "$name.*"
-                }.distinct()
+                .filter { it.endsWith(".class") }
+                .filter { !it.startsWith("META-INF") }
+                .filter { !it.contains("package-info") }
+                .filter { !it.contains("module-info") }
+                .map { it.substringBeforeLast(".") }
+                .map { it.substringBefore("$") }
+                .map { it.replace("/", ".") }
+                .distinct()
             set.addAll(list)
         }
     }
