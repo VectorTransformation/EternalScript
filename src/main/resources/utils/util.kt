@@ -4,8 +4,6 @@
  *
  */
 
-import org.bukkit.*
-
 fun hello() {
     Bukkit.broadcastMessage("Hello, World!")
 }

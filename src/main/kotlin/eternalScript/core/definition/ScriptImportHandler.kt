@@ -23,24 +23,22 @@ class ScriptImportHandler : RefineScriptCompilationConfigurationHandler {
                 ?.filterByAnnotationType<Import>()
                 ?: return context.compilationConfiguration.asSuccess()
 
-        val sources = linkedSetOf<SourceCode>()
+        val sources = annotationList.flatMap { import ->
+            import.annotation.script.mapNotNull { script ->
+                val file = Resource.PLUGINS.child(script)
 
-        annotationList.forEach { import ->
-            import.annotation.script.forEach { script ->
-                    val file = Resource.PLUGINS.child(script)
-
-                    if (!file.exists()) {
-                        val message =
-                            LangManager.translatable("script.not_found").format(DataManager.scriptPath(file).wrap())
-                        Root.info(message)
-                        return@forEach
-                    }
-
-                    sources.add(file.toScriptSource())
+                if (!file.exists()) {
+                    val message =
+                        LangManager.translatable("script.not_found").format(DataManager.scriptPath(file).wrap())
+                    Root.info(message)
+                    return@mapNotNull null
                 }
-        }
 
-        return ScriptCompilationConfiguration(context.compilationConfiguration) {
+                file.toScriptSource()
+            }
+        }.distinct()
+
+        return context.compilationConfiguration.with {
             importScripts.append(sources)
         }.asSuccess()
     }

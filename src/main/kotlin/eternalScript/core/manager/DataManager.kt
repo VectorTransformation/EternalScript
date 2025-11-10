@@ -193,9 +193,9 @@ object DataManager : Manager {
                 !ScriptPrefix.IGNORE.check(name)
             }
         )
-    }.joinToString("\n") { util ->
-        "@file:Import(\"${scriptPath(util)}\")"
-    }.plus("\n")
+    }.joinToString("\n", postfix = "\n\n") { util ->
+        util.readText()
+    }.trimStart()
 
     fun scriptPath(script: File) = relativize(script, Resource.PLUGINS)
 

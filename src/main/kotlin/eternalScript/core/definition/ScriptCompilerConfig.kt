@@ -5,7 +5,7 @@ import eternalScript.core.data.Resource
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.manager.ConfigManager
 import eternalScript.core.script.Script
-import org.bukkit.Bukkit
+import eternalScript.core.the.Root
 import java.io.File
 import java.util.jar.JarEntry
 import java.util.jar.JarFile
@@ -14,21 +14,22 @@ import kotlin.script.experimental.jvm.jvm
 import kotlin.script.experimental.jvm.updateClasspath
 import kotlin.script.experimental.jvm.util.classpathFromClassloader
 
-private val pluginClassPath = Bukkit.getPluginManager().plugins.flatMap { plugin ->
+private val pluginClasspath = Root.plugins().flatMap { plugin ->
     classpathFromClassloader(plugin.javaClass.classLoader) ?: emptyList()
 }
-private val libraryClassPath = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
+private val libraryClasspath = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
     Resource.PLUGINS.child(lib).searchAllSequence(
         { it.extension == "jar" }
     )
 }
-private val classPath = pluginClassPath + libraryClassPath
+private val classpath = pluginClasspath + libraryClasspath
 
-fun ScriptCompilationConfiguration.Builder.importClassPath(list: List<File>) {
-    val set = mutableSetOf<String>()
+fun ScriptCompilationConfiguration.Builder.importClasspath(list: List<File>) {
+    val imports = mutableSetOf<String>()
+
     list.forEach { file ->
         JarFile(file).use { jar ->
-            val list = jar.entries().asSequence()
+            val names = jar.entries().asSequence()
                 .map(JarEntry::getRealName)
                 .filter { it.endsWith(".class") }
                 .filter { !it.startsWith("META-INF") }
@@ -38,10 +39,12 @@ fun ScriptCompilationConfiguration.Builder.importClassPath(list: List<File>) {
                 .map { it.substringBefore("$") }
                 .map { it.replace("/", ".") }
                 .distinct()
-            set.addAll(list)
+
+            imports.addAll(names)
         }
     }
-    defaultImports.append(set)
+
+    defaultImports.append(imports)
 }
 
 class ScriptCompilerConfig : ScriptCompilationConfiguration({
@@ -49,10 +52,10 @@ class ScriptCompilerConfig : ScriptCompilationConfiguration({
 
     isStandalone(false)
 
-    jvm {
-        updateClasspath(classPath)
+    importClasspath(classpath)
 
-        importClassPath(classPath)
+    jvm {
+        updateClasspath(classpath)
 
         compilerOptions.append("-jvm-target=21")
     }

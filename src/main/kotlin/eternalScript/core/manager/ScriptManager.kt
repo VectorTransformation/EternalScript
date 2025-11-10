@@ -39,7 +39,7 @@ object ScriptManager {
     private val cache = ConcurrentHashMap<String, ScriptData>()
 
     private fun eval(value: String): ResultWithDiagnostics<EvaluationResult> {
-        val script = DataManager.utils() + value
+        val script = value + DataManager.utils()
         return compiler.eval(script.toScriptSource(), compilerConfig, evaluatorConfig())
     }
 
@@ -154,8 +154,7 @@ object ScriptManager {
                     }, ClickCallback.Options.builder().build())).build()
             )
             title = script.toComponent()
-            body =
-                listOf(DialogBody.plainMessage(text.toComponent().clickEvent(ClickEvent.copyToClipboard(text)), 1024))
+            body = listOf(DialogBody.plainMessage(text.toComponent().clickEvent(ClickEvent.copyToClipboard(text)), 1024))
             afterAction = DialogBase.DialogAfterAction.NONE
         }
     }

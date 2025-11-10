@@ -24,6 +24,8 @@ object Root {
 
     fun pluginManager() = Bukkit.getPluginManager()
 
+    fun plugins() = pluginManager().plugins
+
     // event
 
     inline fun <reified T : Event> register(
