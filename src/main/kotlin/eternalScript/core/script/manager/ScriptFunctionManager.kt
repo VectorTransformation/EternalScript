@@ -1,11 +1,11 @@
-package eternalScript.core.script
+package eternalScript.core.script.manager
 
 import eternalScript.core.data.ScriptLifecycle
-import eternalScript.core.the.Root
+import eternalScript.core.script.Script
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
-class ScriptFunction() {
+class ScriptFunctionManager() {
     val cache = ConcurrentHashMap<String, ConcurrentLinkedQueue<(Any) -> Unit>>()
 
     inline fun <reified T : Any> save(function: String, noinline block: T.() -> Unit) {
@@ -30,12 +30,12 @@ class ScriptFunction() {
     }
 
     fun register(script: Script) {
-        script.scriptCommand.register()
+        script.commandManager.register()
     }
 
     fun clear(script: Script) {
-        Root.unregister(script.scriptListener)
-        script.scriptCommand.clear()
+        script.listenerManager.clear()
+        script.commandManager.clear()
     }
 
     fun call(script: Script, function: String) = call(script, function, Unit)

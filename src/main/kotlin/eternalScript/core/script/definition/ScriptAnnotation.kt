@@ -1,4 +1,4 @@
-package eternalScript.core.definition
+package eternalScript.core.script.definition
 
 @Target(AnnotationTarget.FILE)
 @Repeatable

@@ -1,4 +1,4 @@
-package eternalScript.core.script
+package eternalScript.core.script.command
 
 import org.bukkit.command.CommandSender
 

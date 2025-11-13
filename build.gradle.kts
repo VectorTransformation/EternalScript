@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.6"
+val pluginVersion = "1.0.7"
 val javaVersion = 21
 val pluginApiVersion = "1.21.8"
 val minecraftVersion = "1.21.10"

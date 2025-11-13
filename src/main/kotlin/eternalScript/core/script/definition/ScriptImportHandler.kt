@@ -1,4 +1,4 @@
-package eternalScript.core.definition
+package eternalScript.core.script.definition
 
 import eternalScript.core.data.Resource
 import eternalScript.core.extension.wrap

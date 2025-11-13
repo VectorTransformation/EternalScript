@@ -2,26 +2,27 @@ package eternalScript.core.script
 
 import eternalScript.core.data.ScriptLifecycle
 import eternalScript.core.manager.ScriptManager
+import eternalScript.core.script.command.ScriptCommandBuilder
+import eternalScript.core.script.manager.ScriptCommandManager
+import eternalScript.core.script.manager.ScriptFunctionManager
+import eternalScript.core.script.manager.ScriptListenerManager
 import eternalScript.core.the.Root
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
-import org.bukkit.event.Listener
 
 abstract class Script {
-    val scriptFunction = ScriptFunction()
-    val scriptCommand = ScriptCommand()
-    val scriptListener = object : Listener {
-
-    }
+    val functionManager = ScriptFunctionManager()
+    val commandManager = ScriptCommandManager()
+    val listenerManager = ScriptListenerManager()
 
     // lifecycle
 
     fun enable(block: () -> Unit) {
-        scriptFunction.save(ScriptLifecycle.ENABLE, block)
+        functionManager.save(ScriptLifecycle.ENABLE, block)
     }
 
     fun disable(block: () -> Unit) {
-        scriptFunction.save(ScriptLifecycle.DISABLE, block)
+        functionManager.save(ScriptLifecycle.DISABLE, block)
     }
 
     // event
@@ -30,14 +31,14 @@ abstract class Script {
         priority: EventPriority = EventPriority.NORMAL,
         noinline block: (T) -> Unit
     ) {
-        Root.register(T::class.java, scriptListener, priority, block)
+        Root.register(T::class.java, listenerManager, priority, block)
     }
 
     // command
 
     fun command(name: String, block: ScriptCommandBuilder.() -> Unit) {
         val builder = ScriptCommandBuilder(name).apply(block)
-        scriptCommand.addCommand(
+        commandManager.addCommand(
             builder.name,
             builder.aliases,
             builder.permission,

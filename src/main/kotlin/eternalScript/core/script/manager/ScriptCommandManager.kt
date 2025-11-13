@@ -1,12 +1,13 @@
-package eternalScript.core.script
+package eternalScript.core.script.manager
 
+import eternalScript.core.script.command.ScriptCommand
 import eternalScript.core.the.Root
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
 import java.util.concurrent.ConcurrentHashMap
 
-class ScriptCommand() {
+class ScriptCommandManager {
     companion object {
         private val commandMap = Root.instance().server.commandMap
         private val knownCommands = commandMap.knownCommands
@@ -22,13 +23,13 @@ class ScriptCommand() {
         executor: (sender: CommandSender, label: String, args: List<String>) -> Unit
     ) {
         val commandKeys = commandKeys(name, aliases)
-        if (commandKeys.any { commandMap.getCommand(it) !is CustomScriptCommand }) {
+        if (commandKeys.any { commandMap.getCommand(it) !is ScriptCommand }) {
             if (commandKeys.any { commandMap.getCommand(it) != null }) return
             cache.forEach { command ->
                 if (commandKeys(command.name, command.aliases).any { commandMap.getCommand(it) != null }) return
             }
         }
-        val command = object : CustomScriptCommand(name) {
+        val command = object : ScriptCommand(name) {
             init {
                 setAliases(aliases)
                 setPermission(permission)
