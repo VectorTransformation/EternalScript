@@ -14,6 +14,7 @@ enum class Resource(val file: File) {
     LIBS(dataFolder.child("libs")),
     UTILS(dataFolder.child("utils")),
     LANG(dataFolder.child("lang")),
+    CACHE(dataFolder.child("cache")),
     ;
 
     fun path() = file.invariantSeparatorsPath

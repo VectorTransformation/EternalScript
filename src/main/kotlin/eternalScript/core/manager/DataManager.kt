@@ -29,7 +29,8 @@ object DataManager : Manager {
     fun makeAll() {
         listOf(
             Resource.DATA_FOLDER,
-            Resource.LIBS
+            Resource.LIBS,
+            Resource.CACHE
         ).forEach(Resource::make)
 
         listOf(
@@ -70,7 +71,7 @@ object DataManager : Manager {
     }
 
     fun readAsync(sender: CommandSender? = null) {
-        job = Root.scope.launch {
+        job = Root.launch {
             ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
                 Resource.PLUGINS.child(script).searchAllSequence(
                     { file ->
@@ -86,30 +87,30 @@ object DataManager : Manager {
                 )
             }.forEach { file ->
                 launch {
-                    val script = scriptPath(file)
-                    val value = file.readText()
-                    loadAsync(script, value, sender, true)
+                    val name = scriptPath(file)
+                    val source = file.readText()
+                    loadAsync(source, name, sender, true)
                 }
             }
         }
     }
 
-    suspend fun loadAsync(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
-        if (scriptLock.contains(script)) {
+    suspend fun loadAsync(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
+        if (scriptLock.contains(name)) {
             LangManager.sendMessage(sender, "script.wait")
             return
         }
 
-        scriptLock.add(script)
+        scriptLock.add(name)
 
         try {
             Root.semaphore.withPermit {
                 runCatching {
-                    ScriptManager.load(script, value, sender, isCompile)
+                    ScriptManager.load(source, name, sender, isCompile)
                 }
             }
         } finally {
-            scriptLock.remove(script)
+            scriptLock.remove(name)
         }
     }
 
@@ -133,26 +134,26 @@ object DataManager : Manager {
                 }
             )
         }.forEach { file ->
-            val script = scriptPath(file)
-            val value = file.readText()
-            loadSync(script, value, sender, true)
+            val name = scriptPath(file)
+            val source = file.readText()
+            loadSync(source, name, sender, true)
         }
     }
 
-    fun loadSync(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
-        if (scriptLock.contains(script)) {
+    fun loadSync(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
+        if (scriptLock.contains(name)) {
             LangManager.sendMessage(sender, "script.wait")
             return
         }
 
-        scriptLock.add(script)
+        scriptLock.add(name)
 
         try {
             runCatching {
-                ScriptManager.load(script, value, sender, isCompile)
+                ScriptManager.load(source, name, sender, isCompile)
             }
         } finally {
-            scriptLock.remove(script)
+            scriptLock.remove(name)
         }
     }
 
@@ -194,8 +195,8 @@ object DataManager : Manager {
             }
         )
     }.joinToString("\n", postfix = "\n\n") { util ->
-        util.readText()
-    }.trimStart()
+        "@file:Import(\"${scriptPath(util)}\")"
+    }
 
     fun scriptPath(script: File) = relativize(script, Resource.PLUGINS)
 

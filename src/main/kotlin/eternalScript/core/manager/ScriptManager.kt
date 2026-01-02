@@ -1,11 +1,7 @@
 package eternalScript.core.manager
 
 import eternalScript.core.data.Config
-import eternalScript.core.data.Resource
 import eternalScript.core.data.ScriptLifecycle
-import eternalScript.core.dialog.CustomDialog
-import eternalScript.core.extension.toComponent
-import eternalScript.core.extension.toTranslatable
 import eternalScript.core.extension.unwrap
 import eternalScript.core.extension.wrap
 import eternalScript.core.script.Script
@@ -15,39 +11,28 @@ import eternalScript.core.script.definition.ScriptCompilerConfig
 import eternalScript.core.script.definition.ScriptEvaluatorConfig
 import eternalScript.core.script.host.ScriptingHostConfig
 import eternalScript.core.the.Root
-import io.papermc.paper.registry.RegistryKey
-import io.papermc.paper.registry.data.dialog.ActionButton
-import io.papermc.paper.registry.data.dialog.DialogBase
-import io.papermc.paper.registry.data.dialog.action.DialogAction
-import io.papermc.paper.registry.data.dialog.body.DialogBody
-import io.papermc.paper.registry.data.dialog.type.DialogType
-import io.papermc.paper.registry.set.RegistrySet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
-import net.kyori.adventure.text.event.ClickCallback
-import net.kyori.adventure.text.event.ClickEvent
 import org.bukkit.command.CommandSender
-import org.bukkit.entity.Player
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.host.toScriptSource
 import kotlin.script.experimental.jvmhost.BasicJvmScriptingHost
 
 object ScriptManager {
-    private val compilerConfig = ScriptCompilerConfig()
     private val evaluatorConfigCache = ConcurrentHashMap<String, ScriptEvaluationConfiguration>()
-    private val scriptingHost = BasicJvmScriptingHost(ScriptingHostConfig())
+    private val scriptingHost = BasicJvmScriptingHost(ScriptingHostConfig)
     private val cache = ConcurrentHashMap<String, ScriptData>()
 
-    private fun eval(value: String): ResultWithDiagnostics<EvaluationResult> {
-        val script = value + DataManager.utils()
-        return scriptingHost.eval(script.toScriptSource(), compilerConfig, evaluatorConfig())
+    private fun eval(source: String, name: String): ResultWithDiagnostics<EvaluationResult> {
+        val merge = DataManager.utils() + source
+        return scriptingHost.eval(merge.toScriptSource(name), ScriptCompilerConfig, evaluatorConfig())
     }
 
-    fun load(script: String, value: String, sender: CommandSender? = null, isCompile: Boolean = false) {
-        val unwrap = script.unwrap()
+    fun load(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
+        val unwrap = name.unwrap()
 
-        val result = eval(value)
+        val result = eval(source, name)
 
         result.reports.forEach { report ->
             if (report.severity > ScriptDiagnostic.Severity.WARNING) {
@@ -60,10 +45,11 @@ object ScriptManager {
         }
 
         val scriptInstance = result.valueOrNull()?.returnValue?.scriptInstance as? Script ?: return
+        val scriptData = ScriptData(scriptInstance, ScriptParser(scriptInstance::class))
 
         remove(unwrap, silent = true)
 
-        cache[unwrap] = ScriptData(scriptInstance, ScriptParser(scriptInstance::class))
+        cache[unwrap] = scriptData
 
         if (ConfigManager.value(Config.DEBUG)) {
             if (!isCompile) {
@@ -72,11 +58,11 @@ object ScriptManager {
             LangManager.sendMessage(sender, "script.format", args = listOf(unwrap.wrap()))
         }
 
-        scriptInstance.functionManager.call(scriptInstance, ScriptLifecycle.ENABLE)
+        scriptData.script.functionManager.call(scriptData.script, ScriptLifecycle.ENABLE)
     }
 
     fun clear(sender: CommandSender? = null, silent: Boolean = false) {
-        Root.scope.launch {
+        Root.launch {
             val keys = cache.keys
             if (keys.isEmpty()) return@launch
             if (!silent) {
@@ -128,40 +114,6 @@ object ScriptManager {
         scripts().map(String::wrap).forEach { script ->
             LangManager.sendMessage(sender, "script.format", args = listOf(script))
         }
-    }
-
-    fun showScriptList(player: Player) {
-        val scripts = scripts().mapNotNull(::scriptView).map(CustomDialog::dialog)
-        CustomDialog.builder {
-            type = DialogType.dialogList(RegistrySet.valueSet(RegistryKey.DIALOG, scripts))
-                .columns(1)
-                .buttonWidth(256)
-                .build()
-            title = LangManager.translatable("script.list").toComponent()
-        }.show(player)
-    }
-
-    fun scriptView(script: String): CustomDialog? {
-        val file = Resource.PLUGINS.child(script)
-        if (!file.exists()) return null
-        val text = file.readText()
-        return CustomDialog.builder {
-            type = DialogType.notice(
-                ActionButton.builder("gui.back".toTranslatable())
-                    .action(DialogAction.customClick({ _, audience ->
-                        if (audience is Player) {
-                            showScriptList(audience)
-                        }
-                    }, ClickCallback.Options.builder().build())).build()
-            )
-            title = script.toComponent()
-            body = listOf(DialogBody.plainMessage(text.toComponent().clickEvent(ClickEvent.copyToClipboard(text)), 1024))
-            afterAction = DialogBase.DialogAfterAction.NONE
-        }
-    }
-
-    fun scriptView(player: Player, script: String) {
-        scriptView(script)?.show(player)
     }
 
     fun evaluatorConfig(): ScriptEvaluationConfiguration {

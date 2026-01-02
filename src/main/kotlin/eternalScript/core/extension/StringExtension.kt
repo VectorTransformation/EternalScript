@@ -2,6 +2,7 @@ package eternalScript.core.extension
 
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.minimessage.MiniMessage
+import java.security.MessageDigest
 
 fun String.toComponent() = MiniMessage.miniMessage().deserialize(this)
 
@@ -18,3 +19,5 @@ fun String.tag(tags: List<String>): String {
 
     return "$prefix$this$suffix"
 }
+
+fun String.toMd5() = MessageDigest.getInstance("MD5").digest(toByteArray()).toHexString()

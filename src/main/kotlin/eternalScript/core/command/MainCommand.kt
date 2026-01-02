@@ -11,8 +11,6 @@ import eternalScript.core.manager.ReloadManager
 import eternalScript.core.manager.ScriptManager
 import eternalScript.core.the.Root
 import io.papermc.paper.command.brigadier.CommandSourceStack
-import kotlinx.coroutines.launch
-import org.bukkit.entity.Player
 
 class MainCommand : CommandBuilder() {
     override val builder = builder("eternalscript") {
@@ -79,22 +77,6 @@ class MainCommand : CommandBuilder() {
         then(builder("list") {
             executes(::list)
         })
-        then(builder("list2") {
-            executes(::list2)
-        })
-        then(builder("view") {
-            then(builder("script", StringArgumentType.string()) {
-                suggests { _, builder ->
-                    DataManager.scripts().map(String::wrap).filter {
-                        it.lowercase().startsWith(builder.remainingLowerCase)
-                    }.forEach {
-                        builder.suggest(it)
-                    }
-                    builder.buildFuture()
-                }
-                executes(::view)
-            })
-        })
     }
     override val aliases = listOf("es")
 
@@ -126,10 +108,11 @@ class MainCommand : CommandBuilder() {
     fun load(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
         if (script !in DataManager.scripts()) return Command.SINGLE_SUCCESS
-        Root.scope.launch {
-            val value = Resource.PLUGINS.child(script).readText()
+        Root.launch {
+            val file = Resource.PLUGINS.child(script)
+            val source = file.readText()
             val sender = context.source.sender
-            DataManager.loadAsync(script, value, sender)
+            DataManager.loadAsync(source, script, sender)
         }
         return Command.SINGLE_SUCCESS
     }
@@ -144,23 +127,6 @@ class MainCommand : CommandBuilder() {
     fun list(context: CommandContext<CommandSourceStack>): Int {
         val sender = context.source.sender
         ScriptManager.scriptList(sender)
-        return Command.SINGLE_SUCCESS
-    }
-
-    fun list2(context: CommandContext<CommandSourceStack>): Int {
-        val sender = context.source.sender
-        if (sender is Player) {
-            ScriptManager.showScriptList(sender)
-        }
-        return Command.SINGLE_SUCCESS
-    }
-
-    fun view(context: CommandContext<CommandSourceStack>): Int {
-        val script = StringArgumentType.getString(context, "script")
-        val sender = context.source.sender
-        if (sender is Player) {
-            ScriptManager.scriptView(sender, script)
-        }
         return Command.SINGLE_SUCCESS
     }
 }

@@ -9,34 +9,33 @@ import kotlin.script.experimental.api.*
 import kotlin.script.experimental.host.toScriptSource
 import kotlin.script.experimental.util.filterByAnnotationType
 
-class ScriptImportHandler : RefineScriptCompilationConfigurationHandler {
-    override operator fun invoke(
-        context: ScriptConfigurationRefinementContext
-    ): ResultWithDiagnostics<ScriptCompilationConfiguration> = parser(context)
+object ScriptImportHandler : RefineScriptCompilationConfigurationHandler {
+    override operator fun invoke(context: ScriptConfigurationRefinementContext) = parser(context)
 
     fun parser(
         context: ScriptConfigurationRefinementContext
     ): ResultWithDiagnostics<ScriptCompilationConfiguration> {
-        val annotationList =
-            context.collectedData?.get(ScriptCollectedData.collectedAnnotations)
-                ?.takeUnless { it.isEmpty() }
+        val annotations = context.collectedData
+                ?.get(ScriptCollectedData.collectedAnnotations)
                 ?.filterByAnnotationType<Import>()
+                ?.takeUnless(List<*>::isEmpty)
                 ?: return context.compilationConfiguration.asSuccess()
 
-        val sources = annotationList.flatMap { import ->
-            import.annotation.script.mapNotNull { script ->
-                val file = Resource.PLUGINS.child(script)
+        val sources = annotations
+            .flatMap { import ->
+                import.annotation.script.mapNotNull { script ->
+                    val file = Resource.PLUGINS.child(script)
 
-                if (!file.exists()) {
-                    val message =
-                        LangManager.translatable("script.not_found").format(DataManager.scriptPath(file).wrap())
-                    Root.info(message)
-                    return@mapNotNull null
+                    if (!file.exists()) {
+                        val message =
+                            LangManager.translatable("script.not_found").format(DataManager.scriptPath(file).wrap())
+                        Root.info(message)
+                        return@mapNotNull null
+                    }
+
+                    file.readText().toScriptSource()
                 }
-
-                file.toScriptSource()
-            }
-        }.distinct()
+            }.distinct()
 
         return context.compilationConfiguration.with {
             importScripts.append(sources)

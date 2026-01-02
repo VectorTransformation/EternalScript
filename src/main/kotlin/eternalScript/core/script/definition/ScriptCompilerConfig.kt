@@ -47,7 +47,7 @@ fun ScriptCompilationConfiguration.Builder.importClasspath(list: List<File>) {
     defaultImports.append(imports)
 }
 
-class ScriptCompilerConfig : ScriptCompilationConfiguration({
+object ScriptCompilerConfig : ScriptCompilationConfiguration({
     baseClass(Script::class)
 
     isStandalone(false)
@@ -61,6 +61,6 @@ class ScriptCompilerConfig : ScriptCompilationConfiguration({
     }
 
     refineConfiguration {
-        onAnnotations(Import::class, handler = ScriptImportHandler())
+        onAnnotations(Import::class, handler = ScriptImportHandler)
     }
 })

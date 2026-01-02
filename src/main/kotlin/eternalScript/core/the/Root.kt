@@ -7,8 +7,12 @@ import eternalScript.core.extension.tag
 import eternalScript.core.extension.toComponent
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
@@ -16,6 +20,7 @@ import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.HandlerList
 import org.bukkit.event.Listener
+import kotlin.coroutines.CoroutineContext
 
 object Root {
     const val ORIGIN = "EternalScript"
@@ -81,7 +86,23 @@ object Root {
 
     fun classLoader(plugin: String) = pluginManager().getPlugin(plugin)?.javaClass?.classLoader
 
-    val scope = CoroutineScope(Dispatchers.Default)
+    private val scope = CoroutineScope(Dispatchers.Default)
 
     val semaphore = Semaphore(20)
+
+    fun launch(
+        context: CoroutineContext = Dispatchers.Default,
+        start: CoroutineStart = CoroutineStart.DEFAULT,
+        block: suspend CoroutineScope.() -> Unit
+    ) = scope.launch(context, start, block)
+
+    fun <T> async(
+        context: CoroutineContext = Dispatchers.Default,
+        start: CoroutineStart = CoroutineStart.DEFAULT,
+        block: suspend CoroutineScope.() -> T
+    ) = scope.async(context, start, block)
+
+    suspend fun <T> ioContext(
+        block: suspend CoroutineScope.() -> T
+    ) = withContext(Dispatchers.IO, block)
 }
