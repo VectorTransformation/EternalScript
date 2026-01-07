@@ -31,20 +31,24 @@ abstract class Script {
         priority: EventPriority = EventPriority.NORMAL,
         noinline block: (T) -> Unit
     ) {
-        Root.register(T::class.java, listenerManager, priority, block)
+        register(priority, block)
+    }
+
+    inline fun <reified T : Event> register(
+        priority: EventPriority = EventPriority.NORMAL,
+        noinline block: (T) -> Unit
+    ) {
+        Root.register(T::class, listenerManager, priority, block)
     }
 
     // command
 
     fun command(name: String, block: ScriptCommandBuilder.() -> Unit) {
-        val builder = ScriptCommandBuilder(name).apply(block)
-        commandManager.addCommand(
-            builder.name,
-            builder.aliases,
-            builder.permission,
-            builder.tabCompleter,
-            builder.executor
-        )
+        register(name, block)
+    }
+
+    fun register(name: String, block: ScriptCommandBuilder.() -> Unit) {
+        commandManager.addCommand(ScriptCommandBuilder(name).apply(block))
     }
 
     // util

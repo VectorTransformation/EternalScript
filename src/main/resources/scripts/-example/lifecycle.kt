@@ -5,11 +5,9 @@
  */
 
 enable {
-    // This code runs when the script is loaded/enabled.
-    Bukkit.broadcastMessage("Eternal Script: Script loaded!")
+    Bukkit.broadcastMessage("enable: script")
 }
 
 disable {
-    // This code runs when the script is unloaded/disabled.
-    Bukkit.broadcastMessage("Eternal Script: Script unloaded!")
+    Bukkit.broadcastMessage("disable: script")
 }

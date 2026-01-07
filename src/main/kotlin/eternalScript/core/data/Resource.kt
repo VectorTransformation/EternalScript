@@ -19,13 +19,13 @@ enum class Resource(val file: File) {
 
     fun path() = file.invariantSeparatorsPath
 
+    fun toPath() = file.toPath()
+
     fun child(child: String) = file.child(child)
 
     fun make() = file.make()
 
     fun save(content: String) = file.save(content)
-
-    fun save(content: ByteArray) = file.save(content)
 
     fun searchSequence(
         fileFilter: (File) -> Boolean = { true }

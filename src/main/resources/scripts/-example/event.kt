@@ -4,10 +4,12 @@
  *
  */
 
-event<PlayerJoinEvent> { event ->
-    Bukkit.broadcastMessage("${event.player.name} joined the server!")
+register<PlayerJoinEvent> { event ->
+    val name = event.player.name
+    Bukkit.broadcastMessage("join: $name")
 }
 
-event<PlayerQuitEvent> { event ->
-    Bukkit.broadcastMessage("${event.player.name} left the server.")
+register<PlayerQuitEvent> { event ->
+    val name = event.player.name
+    Bukkit.broadcastMessage("quit: $name")
 }

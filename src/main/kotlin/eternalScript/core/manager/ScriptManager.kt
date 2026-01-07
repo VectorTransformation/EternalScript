@@ -25,8 +25,8 @@ object ScriptManager {
     private val cache = ConcurrentHashMap<String, ScriptData>()
 
     private fun eval(source: String, name: String): ResultWithDiagnostics<EvaluationResult> {
-        val merge = DataManager.utils() + source
-        return scriptingHost.eval(merge.toScriptSource(name), ScriptCompilerConfig, evaluatorConfig())
+        val code = source + DataManager.utils()
+        return scriptingHost.eval(code.toScriptSource(name), ScriptCompilerConfig, evaluatorConfig())
     }
 
     fun load(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
@@ -35,12 +35,17 @@ object ScriptManager {
         val result = eval(source, name)
 
         result.reports.forEach { report ->
-            if (report.severity > ScriptDiagnostic.Severity.WARNING) {
-                val line = report.location?.start?.line
-                val message = report.message
-                val exception = report.exception?.let { " | Exception: ${it.message}" }.orEmpty()
-                val result = "${unwrap.wrap()} | Line: $line | Message: $message".plus(exception)
-                Root.sendInfo(sender, result)
+            when (report.severity) {
+                ScriptDiagnostic.Severity.DEBUG,
+                ScriptDiagnostic.Severity.WARNING -> {}
+                else -> {
+                    val severity = report.severity.let { " | Severity: ${it.name}" }
+                    val line = report.location?.start?.line?.let { " | Line: $it" }.orEmpty()
+                    val message = report.message.let { " | Message: $it" }
+                    val exception = report.exception?.let { " | Exception: ${it.message}" }.orEmpty()
+                    val result = "$name$severity$line$message$exception"
+                    Root.sendInfo(sender, result)
+                }
             }
         }
 

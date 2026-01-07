@@ -4,6 +4,9 @@ import eternalScript.api.manager.Manager
 import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.data.ScriptPrefix
+import eternalScript.core.data.ScriptSuffix
+import eternalScript.core.extension.readTextAsync
+import eternalScript.core.extension.relativize
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.the.Root
 import kotlinx.coroutines.Job
@@ -14,10 +17,8 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
-import kotlin.io.path.invariantSeparatorsPathString
 
 object DataManager : Manager {
-    private val EXTENSION = listOf("kt", "kts")
     private var job: Job? = null
     private val scriptLock = ConcurrentHashMap.newKeySet<String>()
 
@@ -37,13 +38,13 @@ object DataManager : Manager {
             Resource.SCRIPTS,
             Resource.UTILS
         ).forEach { resource ->
-            saveResource(resource, *EXTENSION.toTypedArray())
+            saveResource(resource, *ScriptSuffix.SCRIPT.suffix)
         }
 
         listOf(
             Resource.LANG
         ).forEach { resource ->
-            saveResource(resource, "json")
+            saveResource(resource, *ScriptSuffix.LANG.suffix)
         }
 
         Root.register(ReloadManager)
@@ -72,23 +73,10 @@ object DataManager : Manager {
 
     fun readAsync(sender: CommandSender? = null) {
         job = Root.launch {
-            ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
-                Resource.PLUGINS.child(script).searchAllSequence(
-                    { file ->
-                        val name = file.name
-                        !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION &&
-                                !ScriptPrefix.SYNC.check(name)
-                    },
-                    { file ->
-                        val name = file.name
-                        !ScriptPrefix.IGNORE.check(name) &&
-                                !ScriptPrefix.SYNC.check(name)
-                    }
-                )
-            }.forEach { file ->
+            scripts().forEach { file ->
                 launch {
-                    val name = scriptPath(file)
-                    val source = file.readText()
+                    val name = file.relativize()
+                    val source = file.readTextAsync()
                     loadAsync(source, name, sender, true)
                 }
             }
@@ -115,26 +103,8 @@ object DataManager : Manager {
     }
 
     fun readSync(sender: CommandSender? = null) {
-        ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
-            Resource.PLUGINS.child(script).searchAllSequence(
-                { file ->
-                    val name = file.name
-
-                    if (ScriptPrefix.IGNORE.check(name) || file.extension !in EXTENSION) {
-                        return@searchAllSequence false
-                    }
-
-                    scriptPath(file)
-                        .split("/")
-                        .mapNotNull { parent ->
-                            parent.ifEmpty { null }
-                        }.any { parent ->
-                            ScriptPrefix.SYNC.check(parent)
-                        }
-                }
-            )
-        }.forEach { file ->
-            val name = scriptPath(file)
+        scripts(isSync = true).forEach { file ->
+            val name = file.relativize()
             val source = file.readText()
             loadSync(source, name, sender, true)
         }
@@ -170,38 +140,29 @@ object DataManager : Manager {
         readAsync(sender)
     }
 
-    fun scripts() = ConfigManager.value<List<String>>(Config.SCRIPTS).flatMap { script ->
+    fun scripts(config: Config = Config.SCRIPTS, isSync: Boolean = false, all: Boolean = false) = ConfigManager.value<List<String>>(config).flatMap { script ->
         Resource.PLUGINS.child(script).searchAllSequence(
             { file ->
-                val name = file.name
-                !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION
+                if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
+                if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
+                if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
+                true
             },
             { file ->
-                val name = file.name
-                !ScriptPrefix.IGNORE.check(name)
+                if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
+                if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
+                true
             }
         )
-    }.map(::scriptPath)
-
-    fun utils() = ConfigManager.value<List<String>>(Config.UTILS).flatMap { util ->
-        Resource.PLUGINS.child(util).searchAllSequence(
-            { file ->
-                val name = file.name
-                !ScriptPrefix.IGNORE.check(name) && file.extension in EXTENSION
-            },
-            { file ->
-                val name = file.name
-                !ScriptPrefix.IGNORE.check(name)
-            }
-        )
-    }.joinToString("\n", postfix = "\n\n") { util ->
-        "@file:Import(\"${scriptPath(util)}\")"
     }
 
-    fun scriptPath(script: File) = relativize(script, Resource.PLUGINS)
+    fun scriptPaths(config: Config = Config.SCRIPTS) = scripts(config).map(File::relativize)
 
-    fun relativize(file: File, resource: Resource) =
-        resource.file.toPath().relativize(file.toPath()).invariantSeparatorsPathString
+    fun utils() = scripts(Config.UTILS, all = true).joinToString(
+        "\n\n",
+        "\n\n",
+        transform = File::readText
+    )
 
     fun isActive() = job?.isActive ?: false
 }

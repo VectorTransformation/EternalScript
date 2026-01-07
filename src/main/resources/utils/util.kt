@@ -1,6 +1,6 @@
 /**
  *
- * Utilities can be accessed from other scripts.
+ * utils: auto import
  *
  */
 

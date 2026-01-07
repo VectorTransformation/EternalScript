@@ -1,6 +1,7 @@
 package eternalScript.core.script.host
 
 import eternalScript.core.data.Resource
+import eternalScript.core.data.ScriptSuffix
 import eternalScript.core.extension.*
 import java.io.File
 import java.security.MessageDigest
@@ -9,43 +10,43 @@ import kotlin.script.experimental.jvm.compilationCache
 import kotlin.script.experimental.jvm.jvm
 import kotlin.script.experimental.jvmhost.CompiledScriptJarsCache
 
-private val regex = """@file:Import\s*\(\s*"([^"]+)"\s*(?:,\s*"([^"]+)"\s*)*\)""".toRegex()
-
-private fun MessageDigest.scriptHashRecursively(text: String, ignored: MutableSet<String>) {
-    val imports = regex.findAll(text)
-        .flatMap { match ->
-            match.groupValues.drop(1)
-        }
-        .filter { it.isNotBlank() }
-        .distinct()
-        .sorted()
-
-    for (importPath in imports) {
-        val file = Resource.PLUGINS.child(importPath)
-        val absolutePath = file.absolutePath
-
-        if (!file.exists() || !ignored.add(absolutePath)) continue
-
-        val fileText = file.readText()
-
-        update(fileText.toByteArray())
-
-        scriptHashRecursively(fileText, ignored)
-    }
-}
+private val regex = """@file:Import\s*\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")*\s*\)""".toRegex()
 
 private fun scriptHash(text: String): String {
-    val md = MessageDigest.getInstance("MD5")
+    val md = MessageDigest.getInstance("SHA-256")
 
     md.update(text.toByteArray())
 
-    md.scriptHashRecursively(text, mutableSetOf())
+    val imports = regex.findAll(text)
+        .flatMap { it.groupValues.drop(1) }
+        .filter { it.isNotBlank() }
+
+    for (path in imports) {
+        val resource = Resource.PLUGINS.child(path)
+
+        if (!resource.exists()) continue
+
+        if (resource.isDirectory) {
+            resource.searchAllSequence(
+                { file ->
+                    if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
+                    true
+                }
+            ).forEach { file ->
+                val text = file.readText()
+                md.update(text.toByteArray())
+            }
+        } else {
+            val text = resource.readText()
+            md.update(text.toByteArray())
+        }
+    }
 
     return md.digest().toHexString()
 }
 
-private fun cache() = CompiledScriptJarsCache { code, configuration ->
-    val name = code.name?.toMd5() ?: return@CompiledScriptJarsCache null
+private fun cache() = CompiledScriptJarsCache { code, _ ->
+    val name = code.name?.toSHA256() ?: return@CompiledScriptJarsCache null
     val hash = scriptHash(code.text)
 
     val cacheDirectory = Resource.CACHE.child(name).make()

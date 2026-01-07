@@ -56,11 +56,10 @@ object ScriptCompilerConfig : ScriptCompilationConfiguration({
 
     jvm {
         updateClasspath(classpath)
-
         compilerOptions.append("-jvm-target=21")
     }
 
     refineConfiguration {
-        onAnnotations(Import::class, handler = ScriptImportHandler)
+        onAnnotations<Import>(ScriptImportHandler)
     }
 })

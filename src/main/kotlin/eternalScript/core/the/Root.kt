@@ -21,6 +21,7 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.HandlerList
 import org.bukkit.event.Listener
 import kotlin.coroutines.CoroutineContext
+import kotlin.reflect.KClass
 
 object Root {
     const val ORIGIN = "EternalScript"
@@ -34,15 +35,15 @@ object Root {
     // event
 
     inline fun <reified T : Event> register(
-        event: Class<T>,
+        event: KClass<T>,
         listener: Listener,
         priority: EventPriority = EventPriority.NORMAL,
-        noinline block: T.() -> Unit
+        noinline block: (T) -> Unit
     ) = pluginManager().registerEvent(
-        event,
+        event.java,
         listener,
         priority,
-        { _, executor -> (executor as T).block() },
+        { _, executor -> if (executor is T) block(executor) },
         instance()
     )
 
@@ -66,7 +67,7 @@ object Root {
 
     fun componentLogger() = instance().componentLogger
 
-    fun namespace() = "<gray>[${ORIGIN.tag(listOf("gold"))}]</gray>"
+    fun namespace() = "<gray>[${ORIGIN.tag("gold")}]</gray>"
 
     fun send(sender: CommandSender?, message: String) {
         if (sender !is Player) return

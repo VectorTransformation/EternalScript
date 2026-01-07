@@ -8,6 +8,7 @@ enable {
     hello() // utils/util.kt
 }
 
-event<PlayerJoinEvent> { event ->
-    Bukkit.broadcastMessage("Hello, ${event.player.name}!")
+register<PlayerJoinEvent> { event ->
+    val name = event.player.name
+    Bukkit.broadcastMessage("Hello, $name!")
 }

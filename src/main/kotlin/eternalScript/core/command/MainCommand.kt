@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.api.command.CommandBuilder
 import eternalScript.core.data.Resource
+import eternalScript.core.extension.readTextAsync
 import eternalScript.core.extension.wrap
 import eternalScript.core.manager.DataManager
 import eternalScript.core.manager.ReloadManager
@@ -51,7 +52,7 @@ class MainCommand : CommandBuilder() {
         then(builder("load") {
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
-                    DataManager.scripts().map(String::wrap).filter {
+                    DataManager.scriptPaths().map(String::wrap).filter {
                         it.lowercase().startsWith(builder.remainingLowerCase)
                     }.forEach {
                         builder.suggest(it)
@@ -107,10 +108,10 @@ class MainCommand : CommandBuilder() {
 
     fun load(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
-        if (script !in DataManager.scripts()) return Command.SINGLE_SUCCESS
+        if (script !in DataManager.scriptPaths()) return Command.SINGLE_SUCCESS
         Root.launch {
             val file = Resource.PLUGINS.child(script)
-            val source = file.readText()
+            val source = file.readTextAsync()
             val sender = context.source.sender
             DataManager.loadAsync(source, script, sender)
         }

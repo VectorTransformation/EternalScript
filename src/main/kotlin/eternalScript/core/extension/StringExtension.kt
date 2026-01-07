@@ -12,7 +12,7 @@ fun String.wrap(affix: CharSequence = "\"") = "$affix$this$affix"
 
 fun String.unwrap(affix: CharSequence = "\"") = removeSurrounding(affix)
 
-fun String.tag(tags: List<String>): String {
+fun String.tag(vararg tags: String): String {
     val prefix = tags.joinToString(separator = "") { "<$it>" }
 
     val suffix = tags.reversed().joinToString(separator = "") { "</${it.split(":").firstOrNull() ?: it}>" }
@@ -20,4 +20,4 @@ fun String.tag(tags: List<String>): String {
     return "$prefix$this$suffix"
 }
 
-fun String.toMd5() = MessageDigest.getInstance("MD5").digest(toByteArray()).toHexString()
+fun String.toSHA256() = MessageDigest.getInstance("SHA-256").digest(toByteArray()).toHexString()
