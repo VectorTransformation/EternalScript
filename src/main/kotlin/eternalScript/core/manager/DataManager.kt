@@ -5,9 +5,9 @@ import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.data.ScriptPrefix
 import eternalScript.core.data.ScriptSuffix
-import eternalScript.core.extension.readTextAsync
 import eternalScript.core.extension.relativize
 import eternalScript.core.extension.searchAllSequence
+import eternalScript.core.script.ScriptFile
 import eternalScript.core.the.Root
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -75,55 +75,55 @@ object DataManager : Manager {
         job = Root.launch {
             scripts().forEach { file ->
                 launch {
-                    val name = file.relativize()
-                    val source = file.readTextAsync()
-                    loadAsync(source, name, sender, true)
+                    loadAsync(file, sender, true)
                 }
             }
         }
     }
 
-    suspend fun loadAsync(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
-        if (scriptLock.contains(name)) {
+    suspend fun loadAsync(file: File, sender: CommandSender? = null, isCompile: Boolean = false) {
+        val scriptFile = ScriptFile(file)
+
+        if (scriptLock.contains(scriptFile.name)) {
             LangManager.sendMessage(sender, "script.wait")
             return
         }
 
-        scriptLock.add(name)
+        scriptLock.add(scriptFile.name)
 
         try {
             Root.semaphore.withPermit {
                 runCatching {
-                    ScriptManager.load(source, name, sender, isCompile)
+                    ScriptManager.load(scriptFile, sender, isCompile)
                 }
             }
         } finally {
-            scriptLock.remove(name)
+            scriptLock.remove(scriptFile.name)
         }
     }
 
     fun readSync(sender: CommandSender? = null) {
         scripts(isSync = true).forEach { file ->
-            val name = file.relativize()
-            val source = file.readText()
-            loadSync(source, name, sender, true)
+            loadSync(file, sender, true)
         }
     }
 
-    fun loadSync(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
-        if (scriptLock.contains(name)) {
+    fun loadSync(file: File, sender: CommandSender? = null, isCompile: Boolean = false) {
+        val scriptFile = ScriptFile(file)
+
+        if (scriptLock.contains(scriptFile.name)) {
             LangManager.sendMessage(sender, "script.wait")
             return
         }
 
-        scriptLock.add(name)
+        scriptLock.add(scriptFile.name)
 
         try {
             runCatching {
-                ScriptManager.load(source, name, sender, isCompile)
+                ScriptManager.load(scriptFile, sender, isCompile)
             }
         } finally {
-            scriptLock.remove(name)
+            scriptLock.remove(scriptFile.name)
         }
     }
 

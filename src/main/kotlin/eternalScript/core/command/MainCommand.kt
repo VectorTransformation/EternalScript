@@ -5,7 +5,6 @@ import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.api.command.CommandBuilder
 import eternalScript.core.data.Resource
-import eternalScript.core.extension.readTextAsync
 import eternalScript.core.extension.wrap
 import eternalScript.core.manager.DataManager
 import eternalScript.core.manager.ReloadManager
@@ -111,9 +110,8 @@ class MainCommand : CommandBuilder() {
         if (script !in DataManager.scriptPaths()) return Command.SINGLE_SUCCESS
         Root.launch {
             val file = Resource.PLUGINS.child(script)
-            val source = file.readTextAsync()
             val sender = context.source.sender
-            DataManager.loadAsync(source, script, sender)
+            DataManager.loadAsync(file, sender)
         }
         return Command.SINGLE_SUCCESS
     }

@@ -6,57 +6,45 @@ import eternalScript.core.extension.relativize
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.extension.wrap
 import eternalScript.core.manager.LangManager
+import eternalScript.core.script.ScriptFile
 import eternalScript.core.the.Root
 import kotlin.script.experimental.api.*
-import kotlin.script.experimental.host.toScriptSource
 import kotlin.script.experimental.util.filterByAnnotationType
 
 object ScriptImportHandler : RefineScriptCompilationConfigurationHandler {
-    override operator fun invoke(context: ScriptConfigurationRefinementContext) = parser(context)
-
-    fun parser(
+    override operator fun invoke(
         context: ScriptConfigurationRefinementContext
-    ): ResultWithDiagnostics<ScriptCompilationConfiguration> {
-        val annotations = context.collectedData
+    ) = context.compilationConfiguration.with {
+        val scripts = buildList {
+            context.collectedData
                 ?.get(ScriptCollectedData.collectedAnnotations)
                 ?.filterByAnnotationType<Import>()
-                ?.takeUnless(List<*>::isEmpty)
-                ?: return context.compilationConfiguration.asSuccess()
+                ?.forEach { import ->
+                    import.annotation.paths.forEach { path ->
+                        val resource = Resource.PLUGINS.child(path)
 
-        val sources = mutableListOf<SourceCode>()
-
-        annotations.forEach { import ->
-            import.annotation.paths.forEach { path ->
-                val resource = Resource.PLUGINS.child(path)
-
-                println(resource.name)
-
-                if (!resource.exists()) {
-                    val message =
-                        LangManager.translatable("script.not_found").format(resource.relativize().wrap())
-                    Root.info(message)
-                    return@forEach
-                }
-
-                if (resource.isDirectory) {
-                    resource.searchAllSequence(
-                        { file ->
-                            if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
-                            true
+                        if (!resource.exists()) {
+                            val message =
+                                LangManager.translatable("script.not_found").format(resource.relativize().wrap())
+                            Root.info(message)
+                            return@forEach
                         }
-                    ).forEach { file ->
-                        val code = file.toScriptSource()
-                        sources.add(code)
+
+                        if (resource.isDirectory) {
+                            resource.searchAllSequence(
+                                { file ->
+                                    if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
+                                    true
+                                }
+                            ).forEach { file ->
+                                add(ScriptFile(file).fileSource)
+                            }
+                        } else {
+                            add(ScriptFile(resource).fileSource)
+                        }
                     }
-                } else {
-                    val code = resource.toScriptSource()
-                    sources.add(code)
                 }
             }
-        }
-
-        return context.compilationConfiguration.with {
-            importScripts.append(sources)
-        }.asSuccess()
-    }
+        importScripts.append(scripts)
+    }.asSuccess()
 }

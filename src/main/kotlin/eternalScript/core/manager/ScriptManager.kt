@@ -6,6 +6,7 @@ import eternalScript.core.extension.unwrap
 import eternalScript.core.extension.wrap
 import eternalScript.core.script.Script
 import eternalScript.core.script.ScriptData
+import eternalScript.core.script.ScriptFile
 import eternalScript.core.script.ScriptParser
 import eternalScript.core.script.definition.ScriptCompilerConfig
 import eternalScript.core.script.definition.ScriptEvaluatorConfig
@@ -16,23 +17,23 @@ import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.script.experimental.api.*
-import kotlin.script.experimental.host.toScriptSource
 import kotlin.script.experimental.jvmhost.BasicJvmScriptingHost
 
 object ScriptManager {
     private val evaluatorConfigCache = ConcurrentHashMap<String, ScriptEvaluationConfiguration>()
-    private val scriptingHost = BasicJvmScriptingHost(ScriptingHostConfig)
+    private val scriptingHost: BasicJvmScriptingHost by lazy {
+        BasicJvmScriptingHost(ScriptingHostConfig)
+    }
     private val cache = ConcurrentHashMap<String, ScriptData>()
 
-    private fun eval(source: String, name: String): ResultWithDiagnostics<EvaluationResult> {
-        val code = source + DataManager.utils()
-        return scriptingHost.eval(code.toScriptSource(name), ScriptCompilerConfig, evaluatorConfig())
+    private fun eval(scriptFile: ScriptFile): ResultWithDiagnostics<EvaluationResult> {
+        return scriptingHost.eval(scriptFile.source, ScriptCompilerConfig, evaluatorConfig())
     }
 
-    fun load(source: String, name: String, sender: CommandSender? = null, isCompile: Boolean = false) {
-        val unwrap = name.unwrap()
+    fun load(scriptFile: ScriptFile, sender: CommandSender? = null, isCompile: Boolean = false) {
+        val unwrap = scriptFile.name.unwrap()
 
-        val result = eval(source, name)
+        val result = eval(scriptFile)
 
         result.reports.forEach { report ->
             when (report.severity) {
@@ -43,7 +44,7 @@ object ScriptManager {
                     val line = report.location?.start?.line?.let { " | Line: $it" }.orEmpty()
                     val message = report.message.let { " | Message: $it" }
                     val exception = report.exception?.let { " | Exception: ${it.message}" }.orEmpty()
-                    val result = "$name$severity$line$message$exception"
+                    val result = "${scriptFile.name}$severity$line$message$exception"
                     Root.sendInfo(sender, result)
                 }
             }

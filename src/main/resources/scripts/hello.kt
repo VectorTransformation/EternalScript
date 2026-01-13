@@ -5,7 +5,7 @@
  */
 
 enable {
-    hello() // utils/util.kt
+    Bukkit.broadcastMessage(message) // merge: utils/util.kt
 }
 
 register<PlayerJoinEvent> { event ->

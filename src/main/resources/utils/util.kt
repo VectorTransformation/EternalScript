@@ -1,9 +1,7 @@
 /**
  *
- * utils: auto import
+ * utils: auto merge
  *
  */
 
-fun hello() {
-    Bukkit.broadcastMessage("Hello, World!")
-}
+val message = "Hello, World!"

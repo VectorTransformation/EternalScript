@@ -14,33 +14,38 @@ import kotlin.script.experimental.jvm.jvm
 import kotlin.script.experimental.jvm.updateClasspath
 import kotlin.script.experimental.jvm.util.classpathFromClassloader
 
-private val pluginClasspath = Root.plugins().flatMap { plugin ->
+fun pluginClasspath() = Root.plugins().flatMap { plugin ->
     classpathFromClassloader(plugin.javaClass.classLoader) ?: emptyList()
 }
-private val libraryClasspath = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
-    Resource.PLUGINS.child(lib).searchAllSequence(
-        { it.extension == "jar" }
-    )
+
+fun libraryClasspath() = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
+    Resource.PLUGINS.child(lib).searchAllSequence({ it.extension == "jar" })
 }
-private val classpath = pluginClasspath + libraryClasspath
+
+private val classpath: List<File> by lazy {
+    buildSet {
+        addAll(pluginClasspath())
+        addAll(libraryClasspath())
+    }.toList()
+}
 
 fun ScriptCompilationConfiguration.Builder.importClasspath(list: List<File>) {
-    val imports = mutableSetOf<String>()
+    val imports = buildSet {
+        list.forEach { file ->
+            JarFile(file).use { jar ->
+                val names = jar.entries().asSequence()
+                    .map(JarEntry::getRealName)
+                    .filter { it.endsWith(".class") }
+                    .filter { !it.startsWith("META-INF") }
+                    .filter { !it.contains("package-info") }
+                    .filter { !it.contains("module-info") }
+                    .map { it.substringBeforeLast(".") }
+                    .map { it.substringBefore("$") }
+                    .map { it.replace("/", ".") }
+                    .distinct()
 
-    list.forEach { file ->
-        JarFile(file).use { jar ->
-            val names = jar.entries().asSequence()
-                .map(JarEntry::getRealName)
-                .filter { it.endsWith(".class") }
-                .filter { !it.startsWith("META-INF") }
-                .filter { !it.contains("package-info") }
-                .filter { !it.contains("module-info") }
-                .map { it.substringBeforeLast(".") }
-                .map { it.substringBefore("$") }
-                .map { it.replace("/", ".") }
-                .distinct()
-
-            imports.addAll(names)
+                addAll(names)
+            }
         }
     }
 
