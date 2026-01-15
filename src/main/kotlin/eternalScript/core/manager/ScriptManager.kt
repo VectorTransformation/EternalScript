@@ -1,16 +1,17 @@
 package eternalScript.core.manager
 
+import eternalScript.api.manager.Manager
 import eternalScript.core.data.Config
-import eternalScript.core.data.ScriptLifecycle
+import eternalScript.core.script.data.ScriptLifecycle
 import eternalScript.core.extension.unwrap
 import eternalScript.core.extension.wrap
 import eternalScript.core.script.Script
-import eternalScript.core.script.ScriptData
-import eternalScript.core.script.ScriptFile
-import eternalScript.core.script.ScriptParser
+import eternalScript.core.script.data.ScriptData
+import eternalScript.core.script.data.ScriptFile
+import eternalScript.core.script.data.ScriptParser
 import eternalScript.core.script.definition.ScriptCompilerConfig
 import eternalScript.core.script.definition.ScriptEvaluatorConfig
-import eternalScript.core.script.host.ScriptingHostConfig
+import eternalScript.core.script.definition.ScriptingHostConfig
 import eternalScript.core.the.Root
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
@@ -19,12 +20,14 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.jvmhost.BasicJvmScriptingHost
 
-object ScriptManager {
+object ScriptManager : Manager {
     private val evaluatorConfigCache = ConcurrentHashMap<String, ScriptEvaluationConfiguration>()
-    private val scriptingHost: BasicJvmScriptingHost by lazy {
-        BasicJvmScriptingHost(ScriptingHostConfig)
-    }
+    private val scriptingHost = BasicJvmScriptingHost(ScriptingHostConfig)
     private val cache = ConcurrentHashMap<String, ScriptData>()
+
+    override fun unregister() {
+        clear()
+    }
 
     private fun eval(scriptFile: ScriptFile): ResultWithDiagnostics<EvaluationResult> {
         return scriptingHost.eval(scriptFile.source, ScriptCompilerConfig, evaluatorConfig())

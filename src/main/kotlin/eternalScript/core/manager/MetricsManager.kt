@@ -10,7 +10,7 @@ object MetricsManager : Manager {
 
     override fun register() {
         if (ConfigManager.value(Config.METRICS)) {
-            Metrics(Root.instance(), PLUGIN_ID)
+            Metrics(Root.INSTANCE, PLUGIN_ID)
         }
     }
 }

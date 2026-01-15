@@ -22,12 +22,10 @@ fun libraryClasspath() = ConfigManager.value<List<String>>(Config.LIBS).flatMap 
     Resource.PLUGINS.child(lib).searchAllSequence({ it.extension == "jar" })
 }
 
-private val classpath: List<File> by lazy {
-    buildSet {
-        addAll(pluginClasspath())
-        addAll(libraryClasspath())
-    }.toList()
-}
+private val classpath = buildSet {
+    addAll(pluginClasspath())
+    addAll(libraryClasspath())
+}.toList()
 
 fun ScriptCompilationConfiguration.Builder.importClasspath(list: List<File>) {
     val imports = buildSet {

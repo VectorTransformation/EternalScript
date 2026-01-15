@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class ScriptCommandManager {
     companion object {
-        private val commandMap = Root.instance().server.commandMap
+        private val commandMap = Root.INSTANCE.server.commandMap
         private val knownCommands = commandMap.knownCommands
         private val prefix = Root.ORIGIN.lowercase()
     }

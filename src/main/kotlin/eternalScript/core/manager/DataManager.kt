@@ -3,11 +3,11 @@ package eternalScript.core.manager
 import eternalScript.api.manager.Manager
 import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
-import eternalScript.core.data.ScriptPrefix
-import eternalScript.core.data.ScriptSuffix
+import eternalScript.core.script.data.ScriptPrefix
+import eternalScript.core.script.data.ScriptSuffix
 import eternalScript.core.extension.relativize
 import eternalScript.core.extension.searchAllSequence
-import eternalScript.core.script.ScriptFile
+import eternalScript.core.script.data.ScriptFile
 import eternalScript.core.the.Root
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -61,7 +61,7 @@ object DataManager : Manager {
                     .filter { name ->
                         name.startsWith(fileName) && extension.any(name::endsWith)
                     }.forEach { name ->
-                        Root.instance().saveResource(name, false)
+                        Root.INSTANCE.saveResource(name, false)
                     }
             }
         }

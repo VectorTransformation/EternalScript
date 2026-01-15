@@ -1,7 +1,7 @@
-package eternalScript.core.script.host
+package eternalScript.core.script.definition
 
 import eternalScript.core.data.Resource
-import eternalScript.core.data.ScriptSuffix
+import eternalScript.core.script.data.ScriptSuffix
 import eternalScript.core.extension.*
 import java.io.File
 import java.security.MessageDigest

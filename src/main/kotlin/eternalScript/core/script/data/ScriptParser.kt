@@ -1,5 +1,6 @@
-package eternalScript.core.script
+package eternalScript.core.script.data
 
+import eternalScript.core.script.Script
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KProperty

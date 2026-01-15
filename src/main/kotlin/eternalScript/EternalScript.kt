@@ -15,6 +15,6 @@ object EternalScript : JavaPlugin() {
     }
 
     override fun onDisable() {
-        ScriptManager.clear()
+        Root.unregister(ScriptManager)
     }
 }

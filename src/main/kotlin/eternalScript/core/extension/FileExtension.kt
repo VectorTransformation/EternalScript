@@ -43,10 +43,10 @@ fun File.clear() {
     deleteRecursively()
 }
 
+fun File.relativize(resource: Resource = Resource.PLUGINS) = resource.toPath().relativize(toPath()).invariantSeparatorsPathString
+
 suspend fun File.readTextAsync(
     charset: Charset = Charsets.UTF_8
 ) = Root.ioContext {
     readText(charset)
 }
-
-fun File.relativize(resource: Resource = Resource.PLUGINS) = resource.toPath().relativize(toPath()).invariantSeparatorsPathString

@@ -1,4 +1,4 @@
-package eternalScript.core.data
+package eternalScript.core.script.data
 
 enum class ScriptLifecycle(val function: String) {
     ENABLE("enable"),

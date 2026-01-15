@@ -1,6 +1,6 @@
 package eternalScript.core.script
 
-import eternalScript.core.data.ScriptLifecycle
+import eternalScript.core.script.data.ScriptLifecycle
 import eternalScript.core.manager.ScriptManager
 import eternalScript.core.script.command.ScriptCommandBuilder
 import eternalScript.core.script.manager.ScriptCommandManager
@@ -53,7 +53,7 @@ abstract class Script {
 
     // util
 
-    fun instance() = Root.instance()
+    fun instance() = Root.INSTANCE
 
     fun scripts() = ScriptManager.scripts()
 

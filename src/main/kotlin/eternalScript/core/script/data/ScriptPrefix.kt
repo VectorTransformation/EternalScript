@@ -1,4 +1,4 @@
-package eternalScript.core.data
+package eternalScript.core.script.data
 
 import java.io.File
 

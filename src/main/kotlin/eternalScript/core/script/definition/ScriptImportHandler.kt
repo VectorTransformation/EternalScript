@@ -1,12 +1,12 @@
 package eternalScript.core.script.definition
 
 import eternalScript.core.data.Resource
-import eternalScript.core.data.ScriptSuffix
+import eternalScript.core.script.data.ScriptSuffix
 import eternalScript.core.extension.relativize
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.extension.wrap
 import eternalScript.core.manager.LangManager
-import eternalScript.core.script.ScriptFile
+import eternalScript.core.script.data.ScriptFile
 import eternalScript.core.the.Root
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.util.filterByAnnotationType

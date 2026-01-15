@@ -26,7 +26,7 @@ import kotlin.reflect.KClass
 object Root {
     const val ORIGIN = "EternalScript"
 
-    fun instance() = pluginManager().getPlugin(ORIGIN) as EternalScript
+    val INSTANCE = EternalScript
 
     fun pluginManager() = Bukkit.getPluginManager()
 
@@ -44,14 +44,14 @@ object Root {
         listener,
         priority,
         { _, executor -> if (executor is T) block(executor) },
-        instance()
+        INSTANCE
     )
 
     fun unregister(vararg listener: Listener) = listener.forEach(HandlerList::unregisterAll)
 
     // command
 
-    fun lifecycleManager() = instance().lifecycleManager
+    fun lifecycleManager() = INSTANCE.lifecycleManager
 
     private fun registerEventHandler(commandBuilder: CommandBuilder) = lifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS) { handler ->
         handler.registrar().register(commandBuilder.builder.build(), commandBuilder.description, commandBuilder.aliases)
@@ -63,9 +63,11 @@ object Root {
 
     fun register(vararg manager: Manager) = manager.forEach(Manager::register)
 
-    fun dataFolder() = instance().dataFolder
+    fun unregister(vararg manager: Manager) = manager.forEach(Manager::unregister)
 
-    fun componentLogger() = instance().componentLogger
+    fun dataFolder() = INSTANCE.dataFolder
+
+    fun componentLogger() = INSTANCE.componentLogger
 
     fun namespace() = "<gray>[${ORIGIN.tag("gold")}]</gray>"
 

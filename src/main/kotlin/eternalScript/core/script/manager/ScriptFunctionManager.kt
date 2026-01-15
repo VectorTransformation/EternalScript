@@ -1,6 +1,6 @@
 package eternalScript.core.script.manager
 
-import eternalScript.core.data.ScriptLifecycle
+import eternalScript.core.script.data.ScriptLifecycle
 import eternalScript.core.script.Script
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
