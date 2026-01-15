@@ -2,4 +2,6 @@ package eternalScript.core.script.data
 
 import eternalScript.core.script.Script
 
-data class ScriptData(val script: Script, val scriptParser: ScriptParser)
+data class ScriptData(val script: Script) {
+    val scriptParser = ScriptParser(script::class)
+}

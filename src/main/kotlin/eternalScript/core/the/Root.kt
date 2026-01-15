@@ -26,7 +26,7 @@ import kotlin.reflect.KClass
 object Root {
     const val ORIGIN = "EternalScript"
 
-    val INSTANCE = EternalScript
+    val INSTANCE = pluginManager().getPlugin(ORIGIN) as EternalScript
 
     fun pluginManager() = Bukkit.getPluginManager()
 

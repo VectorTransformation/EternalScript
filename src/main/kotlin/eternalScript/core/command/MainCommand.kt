@@ -12,7 +12,7 @@ import eternalScript.core.manager.ScriptManager
 import eternalScript.core.the.Root
 import io.papermc.paper.command.brigadier.CommandSourceStack
 
-class MainCommand : CommandBuilder() {
+object MainCommand : CommandBuilder() {
     override val builder = builder("eternalscript") {
         requires(::isOp)
         then(builder("compile") {

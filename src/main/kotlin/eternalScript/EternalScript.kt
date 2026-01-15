@@ -7,9 +7,9 @@ import eternalScript.core.manager.ScriptManager
 import eternalScript.core.the.Root
 import org.bukkit.plugin.java.JavaPlugin
 
-object EternalScript : JavaPlugin() {
+class EternalScript : JavaPlugin() {
     override fun onEnable() {
-        Root.register(MainCommand())
+        Root.register(MainCommand)
         Root.register(DataManager)
         Root.register(MetricsManager)
     }

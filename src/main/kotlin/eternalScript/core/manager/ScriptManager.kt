@@ -8,7 +8,6 @@ import eternalScript.core.extension.wrap
 import eternalScript.core.script.Script
 import eternalScript.core.script.data.ScriptData
 import eternalScript.core.script.data.ScriptFile
-import eternalScript.core.script.data.ScriptParser
 import eternalScript.core.script.definition.ScriptCompilerConfig
 import eternalScript.core.script.definition.ScriptEvaluatorConfig
 import eternalScript.core.script.definition.ScriptingHostConfig
@@ -54,7 +53,7 @@ object ScriptManager : Manager {
         }
 
         val scriptInstance = result.valueOrNull()?.returnValue?.scriptInstance as? Script ?: return
-        val scriptData = ScriptData(scriptInstance, ScriptParser(scriptInstance::class))
+        val scriptData = ScriptData(scriptInstance)
 
         remove(unwrap, silent = true)
 
