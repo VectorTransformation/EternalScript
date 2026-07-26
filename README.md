@@ -6,13 +6,16 @@ EternalScript allows you to dynamically load and manage code at runtime on your 
 
 Here are the available commands for EternalScript:
 
-* `/es compile`: Compiles and loads all scripts within the configured script folder.
-* `/es clear`: Unloads all currently loaded scripts.
-* `/es config`: Reloads the plugin configuration.
-* `/es call [script] [function]`: Calls a function within a specified script.
-* `/es load [script]`: Loads a specific script file (e.g., `/es load "/hello.kt"`).
-* `/es unload [script]`: Unloads a specific script file (e.g., `/es unload "/hello.kt"`).
+* `/es` or `/es status`: Shows the loader state and script counts.
+* `/es reload all`: Reloads every script in `plugins/EternalScript/scripts/`.
+* `/es reload <script>`: Reloads one script (e.g., `/es reload "hello.kt"`). Passing an imported file path reloads only the scripts that depend on it (e.g., `/es reload "-shared/common.kt"`).
+* `/es unload all`: Unloads every currently loaded script.
+* `/es unload <script>`: Unloads one script (e.g., `/es unload "hello.kt"`).
 * `/es list`: Lists all currently loaded scripts.
+* `/es check all`: Compiles every script without executing it.
+* `/es check <script>`: Compiles one script without executing it.
+* `/es config reload`: Reloads the plugin configuration.
+* `/es cache clear`: Clears the compiled-script cache.
 
 ### Script Lifecycle
 
@@ -29,6 +32,8 @@ disable {
     Bukkit.broadcastMessage("Eternal Script: Script unloaded!")
 }
 ```
+
+Reloads are transactional. If the replacement script fails during `enable`, EternalScript cleans it up and re-enables the previous working instance. Coroutine `Job` and Bukkit `BukkitTask` instances passed to `track(...)` are cancelled automatically during unload, replacement, and failed-reload cleanup.
 
 ### Event Handling
 
@@ -87,7 +92,7 @@ Experience the power of EternalScript by writing and running your first Kotlin s
 
 1.  After installation, a `plugins/EternalScript/scripts/` folder will be created.
 2.  Write your Kotlin script file with a `.kt` extension inside this `scripts` folder.
-3.  From the server console, you can use the `/es load "/[script].kt"` command to load a specific script, or `/es compile` to load all scripts within the folder.
+3.  From the server console, use `/es reload "[script].kt"` to load one script or `/es reload all` to load every script in the folder.
 
 ### Simple "Hello World" Example
 
@@ -101,4 +106,4 @@ enable {
 }
 ```
 
-Then, execute `/es load "/hello.kt"` from the server console, and you'll see the message appear in the game chat.
+Then, execute `/es reload "hello.kt"` from the server console, and you'll see the message appear in the game chat.

@@ -6,7 +6,10 @@ import eternalScript.core.script.command.ScriptCommandBuilder
 import eternalScript.core.script.manager.ScriptCommandManager
 import eternalScript.core.script.manager.ScriptFunctionManager
 import eternalScript.core.script.manager.ScriptListenerManager
+import eternalScript.core.script.manager.ScriptTaskManager
 import eternalScript.core.the.Root
+import kotlinx.coroutines.Job
+import org.bukkit.scheduler.BukkitTask
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 
@@ -14,6 +17,7 @@ abstract class Script {
     val functionManager = ScriptFunctionManager()
     val commandManager = ScriptCommandManager()
     val listenerManager = ScriptListenerManager()
+    val taskManager = ScriptTaskManager()
 
     // lifecycle
 
@@ -38,7 +42,7 @@ abstract class Script {
         priority: EventPriority = EventPriority.NORMAL,
         noinline block: (T) -> Unit
     ) {
-        Root.register(T::class, listenerManager, priority, block)
+        listenerManager.add(T::class, priority, block)
     }
 
     // command
@@ -50,6 +54,12 @@ abstract class Script {
     fun register(name: String, block: ScriptCommandBuilder.() -> Unit) {
         commandManager.addCommand(ScriptCommandBuilder(name).apply(block))
     }
+
+    // task
+
+    fun <T : Job> track(job: T) = taskManager.track(job)
+
+    fun <T : BukkitTask> track(task: T) = taskManager.track(task)
 
     // util
 

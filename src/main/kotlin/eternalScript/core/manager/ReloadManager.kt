@@ -12,5 +12,8 @@ object ReloadManager : Manager, Reloader {
     override fun reload(sender: CommandSender?, silent: Boolean) {
         ConfigManager.reload(sender, silent)
         LangManager.reload(sender, silent)
+        if (!silent) {
+            LangManager.sendMessage(sender, "config.reloaded")
+        }
     }
 }

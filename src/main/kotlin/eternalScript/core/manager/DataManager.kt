@@ -1,7 +1,6 @@
 package eternalScript.core.manager
 
 import eternalScript.api.manager.Manager
-import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.script.data.ScriptPrefix
 import eternalScript.core.script.data.ScriptSuffix
@@ -10,6 +9,8 @@ import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.script.data.ScriptFile
 import eternalScript.core.the.Root
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
 import org.bukkit.command.CommandSender
@@ -34,12 +35,7 @@ object DataManager : Manager {
             Resource.CACHE
         ).forEach(Resource::make)
 
-        listOf(
-            Resource.SCRIPTS,
-            Resource.UTILS
-        ).forEach { resource ->
-            saveResource(resource, *ScriptSuffix.SCRIPT.suffix)
-        }
+        saveResource(Resource.SCRIPTS, *ScriptSuffix.SCRIPT.suffix)
 
         listOf(
             Resource.LANG
@@ -68,34 +64,81 @@ object DataManager : Manager {
     }
 
     fun compile(sender: CommandSender? = null) {
-        readAll(sender)
+        if (sender == null) {
+            readAll()
+        } else {
+            reloadAll(sender)
+        }
     }
 
     fun readAsync(sender: CommandSender? = null) {
         job = Root.launch {
             scripts().forEach { file ->
                 launch {
-                    loadAsync(file, sender, true)
+                    loadAsync(file, sender)
                 }
             }
         }
     }
 
-    suspend fun loadAsync(file: File, sender: CommandSender? = null, isCompile: Boolean = false) {
+    suspend fun loadAsync(file: File, sender: CommandSender? = null): Boolean? {
         val scriptFile = ScriptFile(file)
 
         if (scriptLock.contains(scriptFile.name)) {
-            LangManager.sendMessage(sender, "script.wait")
-            return
+            LangManager.sendMessage(sender, "script.operation.busy")
+            return null
         }
 
         scriptLock.add(scriptFile.name)
 
-        try {
+        return try {
             Root.semaphore.withPermit {
                 runCatching {
-                    ScriptManager.load(scriptFile, sender, isCompile)
+                    ScriptManager.load(scriptFile, sender)
+                }.getOrDefault(false)
+            }
+        } finally {
+            scriptLock.remove(scriptFile.name)
+        }
+    }
+
+    fun checkAll(sender: CommandSender? = null) {
+        if (isActive()) {
+            LangManager.sendMessage(sender, "script.operation.busy")
+            return
+        }
+        val files = scripts(all = true).toList()
+        LangManager.sendMessage(sender, "script.check.all_started", args = listOf(files.size.toString()))
+        job = Root.launch {
+            val results = files.map { file ->
+                async {
+                    checkAsync(file, sender, announce = false)
                 }
+            }.awaitAll()
+            val passed = results.count { it == true }
+            LangManager.sendMessage(
+                sender,
+                "script.check.all_completed",
+                args = listOf(files.size.toString(), passed.toString(), (files.size - passed).toString())
+            )
+        }
+    }
+
+    suspend fun checkAsync(file: File, sender: CommandSender? = null, announce: Boolean = true): Boolean? {
+        val scriptFile = ScriptFile(file)
+
+        if (scriptLock.contains(scriptFile.name)) {
+            LangManager.sendMessage(sender, "script.operation.busy")
+            return null
+        }
+
+        scriptLock.add(scriptFile.name)
+
+        return try {
+            Root.semaphore.withPermit {
+                runCatching {
+                    ScriptManager.check(scriptFile, sender, announce)
+                }.getOrDefault(false)
             }
         } finally {
             scriptLock.remove(scriptFile.name)
@@ -104,65 +147,87 @@ object DataManager : Manager {
 
     fun readSync(sender: CommandSender? = null) {
         scripts(isSync = true).forEach { file ->
-            loadSync(file, sender, true)
+            loadSync(file, sender)
         }
     }
 
-    fun loadSync(file: File, sender: CommandSender? = null, isCompile: Boolean = false) {
+    fun loadSync(file: File, sender: CommandSender? = null): Boolean? {
         val scriptFile = ScriptFile(file)
 
         if (scriptLock.contains(scriptFile.name)) {
-            LangManager.sendMessage(sender, "script.wait")
-            return
+            LangManager.sendMessage(sender, "script.operation.busy")
+            return null
         }
 
         scriptLock.add(scriptFile.name)
 
-        try {
+        return try {
             runCatching {
-                ScriptManager.load(scriptFile, sender, isCompile)
-            }
+                ScriptManager.load(scriptFile, sender)
+            }.getOrDefault(false)
         } finally {
             scriptLock.remove(scriptFile.name)
         }
     }
 
+    private fun reloadAll(sender: CommandSender) {
+        if (isActive()) {
+            LangManager.sendMessage(sender, "script.operation.busy")
+            return
+        }
+        val syncFiles = scripts(isSync = true).toList()
+        val asyncFiles = scripts().toList()
+        val total = syncFiles.size + asyncFiles.size
+        LangManager.sendMessage(sender, "script.reload.all_started", args = listOf(total.toString()))
+        job = Root.launch {
+            val available = (syncFiles + asyncFiles)
+                .map { file -> file.relativize(Resource.SCRIPTS) }
+                .toSet()
+            (ScriptManager.scripts() - available).forEach { key ->
+                ScriptManager.remove(key, sender, silent = true)
+            }
+            val syncResults = syncFiles.map { file ->
+                loadSync(file, sender)
+            }
+            val asyncResults = asyncFiles.map { file ->
+                async {
+                    loadAsync(file, sender)
+                }
+            }.awaitAll()
+            val success = (syncResults + asyncResults).count { it == true }
+            LangManager.sendMessage(
+                sender,
+                "script.reload.all_completed",
+                args = listOf(total.toString(), success.toString(), (total - success).toString())
+            )
+        }
+    }
+
     fun readAll(sender: CommandSender? = null) {
         if (isActive()) {
-            LangManager.sendMessage(sender, "script.wait")
+            LangManager.sendMessage(sender, "script.operation.busy")
             return
         }
         ScriptManager.clear(sender, true)
-        if (ConfigManager.value(Config.DEBUG)) {
-            LangManager.sendMessage(sender, "script.loaded")
-        }
         readSync(sender)
         readAsync(sender)
     }
 
-    fun scripts(config: Config = Config.SCRIPTS, isSync: Boolean = false, all: Boolean = false) = ConfigManager.value<List<String>>(config).flatMap { script ->
-        Resource.PLUGINS.child(script).searchAllSequence(
-            { file ->
-                if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
-                if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
-                if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
-                true
-            },
-            { file ->
-                if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
-                if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
-                true
-            }
-        )
-    }
-
-    fun scriptPaths(config: Config = Config.SCRIPTS) = scripts(config).map(File::relativize)
-
-    fun utils() = scripts(Config.UTILS, all = true).joinToString(
-        "\n\n",
-        "\n\n",
-        transform = File::readText
+    fun scripts(isSync: Boolean = false, all: Boolean = false) = Resource.SCRIPTS.searchAllSequence(
+        { file ->
+            if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
+            if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
+            if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
+            true
+        },
+        { file ->
+            if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
+            if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
+            true
+        }
     )
+
+    fun scriptPaths() = scripts(all = true).map { it.relativize(Resource.SCRIPTS) }
 
     fun isActive() = job?.isActive ?: false
 }

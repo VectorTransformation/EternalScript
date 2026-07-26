@@ -9,6 +9,7 @@ import java.io.File
 
 object ConfigManager : Reloader {
     private val cache = mutableMapOf<String, Any>()
+    private val removedKeys = setOf("scripts")
 
     override fun reload(sender: CommandSender?, silent: Boolean) {
         val file = Resource.CONFIG.make()
@@ -17,19 +18,21 @@ object ConfigManager : Reloader {
         }.toSortedMap()
         val yml = YamlConfiguration.loadConfiguration(file)
         val keys = yml.getKeys(true)
+        val removed = removedKeys.filter(yml::contains)
+        removed.forEach {
+            yml.set(it, null)
+            cache.remove(it)
+        }
         val filter = map.filter {
             it.key !in keys
         }
-        if (filter.isNotEmpty()) {
+        if (filter.isNotEmpty() || removed.isNotEmpty()) {
             set(filter, yml, file)
         }
         map.forEach { entry ->
             yml.get(entry.key)?.let {
                 cache[entry.key] = it
             }
-        }
-        if (!silent) {
-            LangManager.sendMessage(sender, "config.reload")
         }
     }
 

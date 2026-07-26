@@ -1,6 +1,6 @@
 /**
  *
- * function /es call <script> <function>
+ * function declaration examples
  *
  */
 

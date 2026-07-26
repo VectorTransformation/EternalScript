@@ -1,7 +1,7 @@
 package eternalScript.core.script.manager
 
-import eternalScript.core.script.data.ScriptLifecycle
 import eternalScript.core.script.Script
+import eternalScript.core.script.data.ScriptLifecycle
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -20,25 +20,14 @@ class ScriptFunctionManager() {
     fun save(lifecycle: ScriptLifecycle, block: () -> Unit) = save(lifecycle.function, block)
 
     fun <T : Any> call(script: Script, function: String, arg: T) {
-        if (ScriptLifecycle.ENABLE.check(function)) {
-            register(script)
-        }
         cache[function]?.forEach { it.invoke(arg) }
-        if (ScriptLifecycle.DISABLE.check(function)) {
-            clear(script)
-        }
-    }
-
-    fun register(script: Script) {
-        script.commandManager.register()
-    }
-
-    fun clear(script: Script) {
-        script.listenerManager.clear()
-        script.commandManager.clear()
     }
 
     fun call(script: Script, function: String) = call(script, function, Unit)
 
     fun call(script: Script, lifecycle: ScriptLifecycle) = call(script, lifecycle.function)
+
+    fun clear() {
+        cache.clear()
+    }
 }

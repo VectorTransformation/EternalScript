@@ -5,3 +5,6 @@
 /gradlew.bat
 /build/
 /run/
+/.codegraph/
+/AGENTS.md
+/codex/

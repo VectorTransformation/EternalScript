@@ -12,14 +12,6 @@ enum class Config(
     LIBS("libs", listOf(
         "${Root.ORIGIN}/libs",
     )),
-    SCRIPTS("scripts", listOf(
-        "${Root.ORIGIN}/scripts",
-    )),
-    UTILS(
-        "utils", listOf(
-            "${Root.ORIGIN}/utils",
-        )
-    ),
     METRICS("metrics", true),
     LANG("lang", "en_US")
     ;

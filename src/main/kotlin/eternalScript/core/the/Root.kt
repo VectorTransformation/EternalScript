@@ -34,16 +34,20 @@ object Root {
 
     // event
 
-    inline fun <reified T : Event> register(
+    fun <T : Event> register(
         event: KClass<T>,
         listener: Listener,
         priority: EventPriority = EventPriority.NORMAL,
-        noinline block: (T) -> Unit
+        block: (T) -> Unit
     ) = pluginManager().registerEvent(
         event.java,
         listener,
         priority,
-        { _, executor -> if (executor is T) block(executor) },
+        { _, executor ->
+            if (event.java.isInstance(executor)) {
+                block(event.java.cast(executor))
+            }
+        },
         INSTANCE
     )
 

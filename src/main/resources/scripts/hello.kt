@@ -5,7 +5,7 @@
  */
 
 enable {
-    Bukkit.broadcastMessage(message) // merge: utils/util.kt
+    Bukkit.broadcastMessage("Hello, World!")
 }
 
 register<PlayerJoinEvent> { event ->
