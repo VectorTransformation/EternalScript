@@ -37,4 +37,11 @@ class ScriptParser(kClass: KClass<*>) {
 
         return null
     }
+
+    internal fun clear() {
+        nestedCache.values.forEach(ScriptParser::clear)
+        nestedCache.clear()
+        propertyCache.clear()
+        functionCache.clear()
+    }
 }

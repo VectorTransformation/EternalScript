@@ -1,5 +1,7 @@
 package eternalScript.core.script.manager
 
+import eternalScript.core.script.data.ScriptExecutionGate
+import eternalScript.core.script.data.ScriptRegistrationGate
 import eternalScript.core.the.Root
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
@@ -7,7 +9,10 @@ import org.bukkit.event.Listener
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.reflect.KClass
 
-class ScriptListenerManager : Listener {
+class ScriptListenerManager(
+    private val executionGate: ScriptExecutionGate,
+    private val registrationGate: ScriptRegistrationGate
+) : Listener {
     private val definitions = ConcurrentLinkedQueue<() -> Unit>()
     private val runtimeRegistrations = ConcurrentLinkedQueue<() -> Unit>()
 
@@ -19,8 +24,15 @@ class ScriptListenerManager : Listener {
         priority: EventPriority,
         block: (T) -> Unit
     ) {
+        check(!active || registrationGate.isOpen) {
+            "Events can only be registered at script top level or during the enable lifecycle."
+        }
         val registration = {
-            Root.register(event, this, priority, block)
+            Root.register(event, this, priority) { value ->
+                executionGate.withActive {
+                    block(value)
+                }
+            }
         }
         if (active) {
             runtimeRegistrations.add(registration)
@@ -43,7 +55,11 @@ class ScriptListenerManager : Listener {
     }
 
     fun clear() {
-        unregister()
+        if (active) {
+            unregister()
+        } else {
+            runtimeRegistrations.clear()
+        }
         definitions.clear()
     }
 }

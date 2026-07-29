@@ -2,12 +2,16 @@ package eternalScript.core.script.manager
 
 import eternalScript.core.script.command.ScriptCommand
 import eternalScript.core.script.command.ScriptCommandBuilder
+import eternalScript.core.script.data.ScriptExecutionGate
+import eternalScript.core.script.data.ScriptRegistrationGate
 import eternalScript.core.the.Root
 import org.bukkit.command.Command
-import org.bukkit.entity.Player
 import java.util.concurrent.ConcurrentHashMap
 
-class ScriptCommandManager {
+class ScriptCommandManager(
+    private val executionGate: ScriptExecutionGate,
+    private val registrationGate: ScriptRegistrationGate
+) {
     companion object {
         private val commandMap = Root.INSTANCE.server.commandMap
         private val knownCommands = commandMap.knownCommands
@@ -20,6 +24,9 @@ class ScriptCommandManager {
     private var active = false
 
     fun addCommand(builder: ScriptCommandBuilder) {
+        check(!active || registrationGate.isOpen) {
+            "Commands can only be registered at script top level or during the enable lifecycle."
+        }
         val commandKeys = commandKeys(builder.name, builder.aliases)
         if (commandKeys.any { commandMap.getCommand(it) !is ScriptCommand }) {
             if (commandKeys.any { commandMap.getCommand(it) != null }) return
@@ -27,7 +34,7 @@ class ScriptCommandManager {
                 if (commandKeys(command.name, command.aliases).any { commandMap.getCommand(it) != null }) return
             }
         }
-        val command = ScriptCommand(builder)
+        val command = ScriptCommand(builder, executionGate)
         if (active) {
             runtimeCommands.add(command)
             commandMap.register(command.name, prefix, command)
@@ -65,13 +72,23 @@ class ScriptCommandManager {
     }
 
     fun clear() {
-        unregister()
+        if (active) {
+            unregister()
+        } else {
+            runtimeCommands.clear()
+        }
         definitions.clear()
     }
 
     private fun commands() = definitions + runtimeCommands
 
     fun updateCommands() {
-        Root.onlinePlayers().forEach(Player::updateCommands)
+        Root.onlinePlayers().forEach { player ->
+            player.scheduler.run(
+                Root.INSTANCE,
+                { player.updateCommands() },
+                null
+            )
+        }
     }
 }

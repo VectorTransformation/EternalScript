@@ -4,17 +4,11 @@ import com.mojang.brigadier.Command
 import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.api.command.CommandBuilder
-import eternalScript.core.data.Resource
 import eternalScript.core.extension.wrap
 import eternalScript.core.manager.DataManager
 import eternalScript.core.manager.LangManager
-import eternalScript.core.manager.ReloadManager
 import eternalScript.core.manager.ScriptManager
-import eternalScript.core.script.definition.ScriptImportCache
-import eternalScript.core.the.Root
 import io.papermc.paper.command.brigadier.CommandSourceStack
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 
 object MainCommand : CommandBuilder() {
     override val builder = builder("eternalscript") {
@@ -26,7 +20,7 @@ object MainCommand : CommandBuilder() {
             })
             then(builder("script", StringArgumentType.string()) {
                 suggests { _, builder ->
-                    (DataManager.scriptPaths() + ScriptImportCache.importPaths())
+                    (DataManager.scriptPaths() + ScriptManager.scripts())
                         .distinct()
                         .map(String::wrap)
                         .filter {
@@ -99,61 +93,13 @@ object MainCommand : CommandBuilder() {
     fun reloadScript(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
         val sender = context.source.sender
-        val available = DataManager.scriptPaths().toSet()
-        val targets = buildSet {
-            if (script in available) add(script)
-            addAll(ScriptImportCache.dependents(script).filter(available::contains))
-        }.sorted()
-
-        if (targets.isEmpty()) {
-            LangManager.sendMessage(sender, "script.error.not_found", args = listOf(script.wrap()))
-            return Command.SINGLE_SUCCESS
-        }
-
-        val dependentReload = targets.size > 1 || targets.single() != script
-        if (dependentReload) {
-            LangManager.sendMessage(
-                sender,
-                "script.reload.dependents_started",
-                args = listOf(script.wrap(), targets.size.toString())
-            )
-        } else {
-            LangManager.sendMessage(sender, "script.reload.one_started", args = listOf(script.wrap()))
-        }
-
-        Root.launch {
-            val results = targets.map { target ->
-                async {
-                    DataManager.loadAsync(Resource.SCRIPTS.child(target), sender)
-                }
-            }.awaitAll()
-            val success = results.count { it == true }
-
-            if (dependentReload) {
-                LangManager.sendMessage(
-                    sender,
-                    "script.reload.dependents_completed",
-                    args = listOf(
-                        script.wrap(),
-                        targets.size.toString(),
-                        success.toString(),
-                        (targets.size - success).toString()
-                    )
-                )
-            } else {
-                when (results.single()) {
-                    true -> LangManager.sendMessage(sender, "script.reload.completed", args = listOf(script.wrap()))
-                    false -> LangManager.sendMessage(sender, "script.reload.failed", args = listOf(script.wrap()))
-                    null -> {}
-                }
-            }
-        }
+        DataManager.reloadScript(script, sender)
         return Command.SINGLE_SUCCESS
     }
 
     fun unloadAll(context: CommandContext<CommandSourceStack>): Int {
         val sender = context.source.sender
-        ScriptManager.clear(sender)
+        DataManager.unloadAll(sender)
         return Command.SINGLE_SUCCESS
     }
 
@@ -191,30 +137,18 @@ object MainCommand : CommandBuilder() {
     fun checkScript(context: CommandContext<CommandSourceStack>): Int {
         val script = StringArgumentType.getString(context, "script")
         val sender = context.source.sender
-        if (script !in DataManager.scriptPaths()) {
-            LangManager.sendMessage(sender, "script.error.not_found", args = listOf(script.wrap()))
-            return Command.SINGLE_SUCCESS
-        }
-        LangManager.sendMessage(sender, "script.check.one_started", args = listOf(script.wrap()))
-        Root.launch {
-            DataManager.checkAsync(Resource.SCRIPTS.child(script), sender)
-        }
+        DataManager.checkScript(script, sender)
         return Command.SINGLE_SUCCESS
     }
 
     fun reloadConfig(context: CommandContext<CommandSourceStack>): Int {
-        ReloadManager.reload(context.source.sender, false)
+        DataManager.reloadConfig(context.source.sender)
         return Command.SINGLE_SUCCESS
     }
 
     fun clearCache(context: CommandContext<CommandSourceStack>): Int {
         val sender = context.source.sender
-        if (DataManager.isActive()) {
-            LangManager.sendMessage(sender, "script.operation.busy")
-            return Command.SINGLE_SUCCESS
-        }
-        ScriptImportCache.reset()
-        LangManager.sendMessage(sender, "cache.cleared")
+        DataManager.clearCache(sender)
         return Command.SINGLE_SUCCESS
     }
 }

@@ -1,9 +1,13 @@
 package eternalScript.core.script.command
 
+import eternalScript.core.script.data.ScriptExecutionGate
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 
-class ScriptCommand(val builder: ScriptCommandBuilder) : Command(builder.name) {
+class ScriptCommand(
+    val builder: ScriptCommandBuilder,
+    private val executionGate: ScriptExecutionGate
+) : Command(builder.name) {
     init {
         aliases = builder.aliases
         permission = builder.permission
@@ -13,14 +17,20 @@ class ScriptCommand(val builder: ScriptCommandBuilder) : Command(builder.name) {
         sender: CommandSender,
         alias: String,
         args: Array<String>
-    ) = builder.tabCompleter(sender, alias, args.toList())
+    ) = executionGate.withActive {
+        builder.tabCompleter(sender, alias, args.toList())
+    } ?: emptyList()
 
     override fun execute(
         sender: CommandSender,
         label: String,
         args: Array<String>
-    ) = if (testPermissionSilent(sender)) {
-        builder.executor(sender, label, args.toList())
-        true
-    } else false
+    ) = executionGate.withActive {
+        if (testPermissionSilent(sender)) {
+            builder.executor(sender, label, args.toList())
+            true
+        } else {
+            false
+        }
+    } ?: false
 }

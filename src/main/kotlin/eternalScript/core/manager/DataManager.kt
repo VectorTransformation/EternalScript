@@ -1,31 +1,75 @@
 package eternalScript.core.manager
 
 import eternalScript.api.manager.Manager
+import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
-import eternalScript.core.script.data.ScriptPrefix
+import eternalScript.core.extension.wrap
 import eternalScript.core.script.data.ScriptSuffix
-import eternalScript.core.extension.relativize
-import eternalScript.core.extension.searchAllSequence
-import eternalScript.core.script.data.ScriptFile
+import eternalScript.core.script.definition.ScriptCompilationCache
+import eternalScript.core.script.project.PROJECT_SCRIPT_NAME
+import eternalScript.core.script.project.legacyScriptWarning
+import eternalScript.core.script.project.runtimeScriptProjectRepository
+import eternalScript.core.the.GlobalTaskOwner
 import eternalScript.core.the.Root
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
+import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.LockSupport
+import java.util.logging.Level
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 object DataManager : Manager {
-    private var job: Job? = null
-    private val scriptLock = ConcurrentHashMap.newKeySet<String>()
+    private val operationLock = Any()
+    private var operation: ScriptProjectOperation? = null
+    private val lifecycle = DataManagerLifecycle()
+    private val scriptRepository by lazy(::runtimeScriptProjectRepository)
 
     override fun register() {
+        synchronized(operationLock) {
+            lifecycle.open()
+        }
+        ScriptManager.open()
         makeAll()
         compile()
+    }
+
+    fun shutdown() {
+        val current = synchronized(operationLock) {
+            lifecycle.close()
+            ScriptManager.close()
+            operation.also { activeOperation ->
+                operation = null
+                activeOperation?.owner?.let(Root::beginGlobalTaskOwnerShutdown)
+            }
+        }
+        Root.shutdown(current?.owner)
+        current?.job?.cancel()
+        val operationStopped = try {
+            awaitOperationShutdown(
+                operation = current?.job,
+                timeoutMillis = OPERATION_SHUTDOWN_TIMEOUT_MILLIS,
+                isGlobalThread = Bukkit.isGlobalTickThread(),
+                pumpGlobalTasks = {
+                    current?.owner?.let(Root::drainPendingGlobalTasks)
+                }
+            )
+        } finally {
+            current?.owner?.let(Root::closeGlobalTaskOwner)
+        }
+        if (!operationStopped) {
+            Root.INSTANCE.logger.warning(
+                "The active script project operation did not stop within " +
+                    "${OPERATION_SHUTDOWN_TIMEOUT_MILLIS}ms; shutdown will continue " +
+                    "with generation commits fenced."
+            )
+        }
     }
 
     fun makeAll() {
@@ -65,169 +109,294 @@ object DataManager : Manager {
 
     fun compile(sender: CommandSender? = null) {
         if (sender == null) {
-            readAll()
+            startOperation(null) { session ->
+                snapshotWithLegacyWarning()?.let { project ->
+                    if (lifecycle.accepts(session)) {
+                        ScriptManager.load(project)
+                    }
+                }
+            }
         } else {
             reloadAll(sender)
         }
     }
 
-    fun readAsync(sender: CommandSender? = null) {
-        job = Root.launch {
-            scripts().forEach { file ->
-                launch {
-                    loadAsync(file, sender)
+    fun reloadAll(sender: CommandSender) {
+        startOperation(sender) { session ->
+            val project = snapshotWithLegacyWarning()
+            if (!lifecycle.accepts(session)) return@startOperation
+            if (project == null) {
+                Root.global {
+                    LangManager.sendMessage(sender, "script.error.empty_project")
                 }
+                return@startOperation
+            }
+            val total = project.files.size
+            Root.global {
+                LangManager.sendMessage(sender, "script.reload.all_started", args = listOf(total.toString()))
+            }
+
+            if (!lifecycle.accepts(session)) return@startOperation
+            val success = ScriptManager.load(project, sender)
+            val passed = if (success) total else 0
+            Root.global {
+                LangManager.sendMessage(
+                    sender,
+                    "script.reload.all_completed",
+                    args = listOf(total.toString(), passed.toString(), (total - passed).toString())
+                )
             }
         }
     }
 
-    suspend fun loadAsync(file: File, sender: CommandSender? = null): Boolean? {
-        val scriptFile = ScriptFile(file)
-
-        if (scriptLock.contains(scriptFile.name)) {
-            LangManager.sendMessage(sender, "script.operation.busy")
-            return null
-        }
-
-        scriptLock.add(scriptFile.name)
-
-        return try {
-            Root.semaphore.withPermit {
-                runCatching {
-                    ScriptManager.load(scriptFile, sender)
-                }.getOrDefault(false)
+    fun reloadScript(script: String, sender: CommandSender) {
+        startOperation(sender) { session ->
+            val project = snapshotWithLegacyWarning()
+            if (!lifecycle.accepts(session)) return@startOperation
+            val available = project?.files?.mapTo(hashSetOf()) { it.name }.orEmpty()
+            if (script !in available && script !in ScriptManager.scripts()) {
+                Root.global {
+                    LangManager.sendMessage(sender, "script.error.not_found", args = listOf(script.wrap()))
+                }
+                return@startOperation
             }
-        } finally {
-            scriptLock.remove(scriptFile.name)
+
+            Root.global {
+                LangManager.sendMessage(sender, "script.reload.one_started", args = listOf(script.wrap()))
+            }
+            if (!lifecycle.accepts(session)) return@startOperation
+            val success = project?.let { ScriptManager.load(it, sender) } ?: false
+            Root.global {
+                val key = if (success) "script.reload.completed" else "script.reload.failed"
+                LangManager.sendMessage(sender, key, args = listOf(script.wrap()))
+            }
         }
     }
 
     fun checkAll(sender: CommandSender? = null) {
-        if (isActive()) {
-            LangManager.sendMessage(sender, "script.operation.busy")
-            return
+        startOperation(sender) { session ->
+            val project = snapshotWithLegacyWarning()
+            if (!lifecycle.accepts(session)) return@startOperation
+            val total = project?.files?.size ?: 0
+            Root.global {
+                LangManager.sendMessage(sender, "script.check.all_started", args = listOf(total.toString()))
+            }
+            if (!lifecycle.accepts(session)) return@startOperation
+            val success = project == null || ScriptManager.check(project, sender)
+            val passed = if (success) total else 0
+            Root.global {
+                LangManager.sendMessage(
+                    sender,
+                    "script.check.all_completed",
+                    args = listOf(total.toString(), passed.toString(), (total - passed).toString())
+                )
+            }
         }
-        val files = scripts(all = true).toList()
-        LangManager.sendMessage(sender, "script.check.all_started", args = listOf(files.size.toString()))
-        job = Root.launch {
-            val results = files.map { file ->
-                async {
-                    checkAsync(file, sender, announce = false)
+    }
+
+    fun checkScript(script: String, sender: CommandSender) {
+        startOperation(sender) { session ->
+            val project = snapshotWithLegacyWarning()
+            if (!lifecycle.accepts(session)) return@startOperation
+            if (project == null || project.files.none { it.name == script }) {
+                Root.global {
+                    LangManager.sendMessage(sender, "script.error.not_found", args = listOf(script.wrap()))
                 }
-            }.awaitAll()
-            val passed = results.count { it == true }
-            LangManager.sendMessage(
-                sender,
-                "script.check.all_completed",
-                args = listOf(files.size.toString(), passed.toString(), (files.size - passed).toString())
-            )
-        }
-    }
-
-    suspend fun checkAsync(file: File, sender: CommandSender? = null, announce: Boolean = true): Boolean? {
-        val scriptFile = ScriptFile(file)
-
-        if (scriptLock.contains(scriptFile.name)) {
-            LangManager.sendMessage(sender, "script.operation.busy")
-            return null
-        }
-
-        scriptLock.add(scriptFile.name)
-
-        return try {
-            Root.semaphore.withPermit {
-                runCatching {
-                    ScriptManager.check(scriptFile, sender, announce)
-                }.getOrDefault(false)
+                return@startOperation
             }
-        } finally {
-            scriptLock.remove(scriptFile.name)
-        }
-    }
 
-    fun readSync(sender: CommandSender? = null) {
-        scripts(isSync = true).forEach { file ->
-            loadSync(file, sender)
-        }
-    }
-
-    fun loadSync(file: File, sender: CommandSender? = null): Boolean? {
-        val scriptFile = ScriptFile(file)
-
-        if (scriptLock.contains(scriptFile.name)) {
-            LangManager.sendMessage(sender, "script.operation.busy")
-            return null
-        }
-
-        scriptLock.add(scriptFile.name)
-
-        return try {
-            runCatching {
-                ScriptManager.load(scriptFile, sender)
-            }.getOrDefault(false)
-        } finally {
-            scriptLock.remove(scriptFile.name)
-        }
-    }
-
-    private fun reloadAll(sender: CommandSender) {
-        if (isActive()) {
-            LangManager.sendMessage(sender, "script.operation.busy")
-            return
-        }
-        val syncFiles = scripts(isSync = true).toList()
-        val asyncFiles = scripts().toList()
-        val total = syncFiles.size + asyncFiles.size
-        LangManager.sendMessage(sender, "script.reload.all_started", args = listOf(total.toString()))
-        job = Root.launch {
-            val available = (syncFiles + asyncFiles)
-                .map { file -> file.relativize(Resource.SCRIPTS) }
-                .toSet()
-            (ScriptManager.scripts() - available).forEach { key ->
-                ScriptManager.remove(key, sender, silent = true)
+            Root.global {
+                LangManager.sendMessage(sender, "script.check.one_started", args = listOf(script.wrap()))
             }
-            val syncResults = syncFiles.map { file ->
-                loadSync(file, sender)
-            }
-            val asyncResults = asyncFiles.map { file ->
-                async {
-                    loadAsync(file, sender)
+            if (!lifecycle.accepts(session)) return@startOperation
+            ScriptManager.check(project, sender, announceName = script)
+        }
+    }
+
+    fun unloadAll(sender: CommandSender) {
+        startOperation(sender) { session ->
+            if (!lifecycle.accepts(session)) return@startOperation
+            val count = ScriptManager.clearNow()
+            if (count == null) {
+                Root.global {
+                    LangManager.sendMessage(sender, "script.operation.busy")
                 }
-            }.awaitAll()
-            val success = (syncResults + asyncResults).count { it == true }
-            LangManager.sendMessage(
-                sender,
-                "script.reload.all_completed",
-                args = listOf(total.toString(), success.toString(), (total - success).toString())
-            )
+                return@startOperation
+            }
+            Root.global {
+                LangManager.sendMessage(sender, "script.unload.all_completed", args = listOf(count.toString()))
+            }
         }
     }
 
-    fun readAll(sender: CommandSender? = null) {
-        if (isActive()) {
+    fun reloadConfig(sender: CommandSender) {
+        startOperation(sender) { session ->
+            Root.global {
+                if (lifecycle.accepts(session)) {
+                    ReloadManager.reload(sender, false)
+                }
+            }
+        }
+    }
+
+    fun clearCache(sender: CommandSender) {
+        startOperation(sender) { session ->
+            val cleared = synchronized(operationLock) {
+                if (!lifecycle.accepts(session)) {
+                    false
+                } else {
+                    ScriptCompilationCache.reset()
+                    true
+                }
+            }
+            if (!cleared) return@startOperation
+            Root.global {
+                LangManager.sendMessage(sender, "cache.cleared")
+            }
+        }
+    }
+
+    private fun startOperation(
+        sender: CommandSender?,
+        block: suspend (session: Long) -> Unit
+    ): Boolean {
+        val current = synchronized(operationLock) {
+            val session = lifecycle.openSession() ?: return false
+            if (operation != null) return@synchronized null
+
+            val owner = Root.newGlobalTaskOwner()
+            val created = Root.launch(context = owner, start = CoroutineStart.LAZY) {
+                try {
+                    if (lifecycle.accepts(session)) {
+                        block(session)
+                    }
+                } catch (exception: Throwable) {
+                    if (lifecycle.accepts(session)) {
+                        Root.global {
+                            LangManager.sendMessage(
+                                sender,
+                                "script.compile.error",
+                                args = listOf(
+                                    PROJECT_SCRIPT_NAME.wrap(),
+                                    "-",
+                                    "-",
+                                    exception.message ?: exception.javaClass.simpleName
+                                )
+                            )
+                            if (ConfigManager.value(Config.DEBUG)) {
+                                Root.INSTANCE.logger.log(Level.WARNING, "EternalScript project operation failed.", exception)
+                            }
+                        }
+                    }
+                }
+            }
+            val createdOperation = ScriptProjectOperation(created, owner, session)
+            operation = createdOperation
+            created.invokeOnCompletion {
+                synchronized(operationLock) {
+                    if (operation === createdOperation) {
+                        operation = null
+                    }
+                }
+                Root.closeGlobalTaskOwner(owner)
+            }
+            createdOperation
+        }
+
+        if (current == null) {
             LangManager.sendMessage(sender, "script.operation.busy")
-            return
+            return false
         }
-        ScriptManager.clear(sender, true)
-        readSync(sender)
-        readAsync(sender)
+
+        current.job.start()
+        return true
     }
 
-    fun scripts(isSync: Boolean = false, all: Boolean = false) = Resource.SCRIPTS.searchAllSequence(
-        { file ->
-            if (!ScriptSuffix.SCRIPT.check(file)) return@searchAllSequence false
-            if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
-            if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
-            true
-        },
-        { file ->
-            if (ScriptPrefix.IGNORE.check(file)) return@searchAllSequence false
-            if (!all && ScriptPrefix.SYNC.check(file) != isSync) return@searchAllSequence false
-            true
+    private fun snapshotWithLegacyWarning() =
+        scriptRepository.snapshot().also {
+            warnLegacyScripts()
         }
+
+    private fun warnLegacyScripts() {
+        val legacy = scriptRepository.legacyPaths()
+        legacyScriptWarning(legacy)?.let(Root.INSTANCE.logger::warning)
+    }
+
+    fun scriptPaths() = scriptRepository.paths()
+
+    fun isActive() = synchronized(operationLock) {
+        operation != null
+    }
+}
+
+private data class ScriptProjectOperation(
+    val job: Job,
+    val owner: GlobalTaskOwner,
+    val session: Long
+)
+
+internal class DataManagerLifecycle {
+    private data class State(
+        val session: Long,
+        val open: Boolean
     )
 
-    fun scriptPaths() = scripts(all = true).map { it.relativize(Resource.SCRIPTS) }
+    private val state = AtomicReference(State(session = 0, open = false))
 
-    fun isActive() = job?.isActive ?: false
+    fun open(): Long =
+        state.updateAndGet { current ->
+            if (current.open) current else State(current.session + 1, true)
+        }.session
+
+    fun close(): Long =
+        state.updateAndGet { current ->
+            if (!current.open) current else State(current.session + 1, false)
+        }.session
+
+    fun openSession(): Long? =
+        state.get().let { current ->
+            current.session.takeIf { current.open }
+        }
+
+    fun accepts(session: Long): Boolean =
+        state.get().let { current ->
+            current.open && current.session == session
+        }
 }
+
+internal fun awaitOperationShutdown(
+    operation: Job?,
+    timeoutMillis: Long,
+    isGlobalThread: Boolean,
+    pumpGlobalTasks: () -> Unit
+): Boolean {
+    require(timeoutMillis >= 0L) {
+        "Operation shutdown timeout must not be negative."
+    }
+    if (operation == null || operation.isCompleted) return true
+    if (!isGlobalThread) {
+        return runBlocking {
+            withTimeoutOrNull(timeoutMillis) {
+                operation.join()
+                true
+            } ?: false
+        }
+    }
+
+    val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    val started = System.nanoTime()
+    while (!operation.isCompleted) {
+        pumpGlobalTasks()
+        if (operation.isCompleted) return true
+
+        val elapsed = System.nanoTime() - started
+        if (elapsed >= timeoutNanos) return false
+        LockSupport.parkNanos(
+            minOf(SHUTDOWN_OPERATION_POLL_NANOS, timeoutNanos - elapsed)
+        )
+    }
+    return true
+}
+
+private const val OPERATION_SHUTDOWN_TIMEOUT_MILLIS = 10_000L
+private const val SHUTDOWN_OPERATION_POLL_NANOS = 100_000L

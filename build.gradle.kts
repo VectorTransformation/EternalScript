@@ -2,8 +2,6 @@ plugins {
     `java-library`
     // https://kotlinlang.org/docs/releases.html
     kotlin("jvm")
-    // https://github.com/Kotlin/kotlinx.serialization
-    kotlin("plugin.serialization")
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
     // https://github.com/jpenilla/run-task
@@ -13,7 +11,7 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.8"
+val pluginVersion = "2.0.0"
 val javaVersion = 21
 val pluginApiVersion = "1.21.8"
 val minecraftVersion = "1.21.11"
@@ -53,9 +51,19 @@ dependencies {
     compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
     compileOnly(kotlin("reflect", kotlinVersion))
     compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    compileOnly(kotlin("scripting-common", kotlinVersion))
     compileOnly(kotlin("scripting-jvm", kotlinVersion))
-    compileOnly(kotlin("scripting-jvm-host", kotlinVersion))
+    compileOnly(kotlin("compiler-embeddable", kotlinVersion))
+    compileOnly("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
+    compileOnly("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
     compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    testImplementation(kotlin("test", kotlinVersion))
+    testImplementation(kotlin("compiler-embeddable", kotlinVersion))
+    testImplementation(kotlin("scripting-common", kotlinVersion))
+    testImplementation(kotlin("scripting-jvm", kotlinVersion))
+    testImplementation("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
+    testImplementation("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 }
 
 fun libraries(): String {
@@ -84,6 +92,17 @@ tasks {
         minecraftVersion(minecraftVersion)
         jvmArgs(minecraftArgs)
     }
+    test {
+        maxHeapSize = "1G"
+    }
+    register("checkScripts") {
+        group = "verification"
+        description = "Checks the workspace and bundled reloadable Kotlin projects without evaluating them."
+        dependsOn(":script-workspace:checkScripts")
+    }
+    check {
+        dependsOn("checkScripts")
+    }
     processResources {
         doLast {
             addLibraries()
@@ -95,10 +114,6 @@ tasks {
     jar {
         version = pluginVersion()
     }
-}
-
-java {
-    toolchain.languageVersion = JavaLanguageVersion.of(javaVersion)
 }
 
 kotlin {

@@ -24,6 +24,8 @@ object LangManager : Reloader {
         "script.load.completed",
         "script.loaded",
         "script.not_found",
+        "script.reload.dependents_completed",
+        "script.reload.dependents_started",
         "script.unload.all",
         "script.unloaded",
         "script.wait"

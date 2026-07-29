@@ -4,14 +4,23 @@
  *
  */
 
-register("test-command") {
-    aliases("t1", "t2")
-    permission(null)
-    tabCompleter { _, _, _ ->
-        emptyList()
-    }
-    executor { sender, _, _ ->
-        val name = sender.name
-        Bukkit.broadcastMessage("sender: $name")
+package eternalScript.examples
+
+import eternalScript.api.script.EternalScriptEntry
+import eternalScript.core.script.Script
+import org.bukkit.Bukkit
+
+@EternalScriptEntry
+internal fun Script.configureCommandExample() {
+    register("test-command") {
+        aliases("t1", "t2")
+        permission(null)
+        tabCompleter { _, _, _ ->
+            emptyList()
+        }
+        executor { sender, _, _ ->
+            val name = sender.name
+            Bukkit.broadcastMessage("sender: $name")
+        }
     }
 }

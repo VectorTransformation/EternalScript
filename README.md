@@ -1,109 +1,264 @@
-## EternalScript: A Kotlin Scripting Plugin for Minecraft Paper Servers
+## EternalScript: Hot-Reloadable Kotlin for Minecraft Paper
 
-EternalScript allows you to dynamically load and manage code at runtime on your Minecraft Paper server without requiring restarts. It supports diverse customization features like script lifecycle management, event handling, and custom commands.
+EternalScript compiles ordinary Kotlin source files at runtime and replaces the
+active project without restarting the server. The project can register Paper
+events, commands, lifecycle callbacks, coroutines, and scheduler tasks.
 
 ### Commands
 
-Here are the available commands for EternalScript:
-
-* `/es` or `/es status`: Shows the loader state and script counts.
-* `/es reload all`: Reloads every script in `plugins/EternalScript/scripts/`.
-* `/es reload <script>`: Reloads one script (e.g., `/es reload "hello.kt"`). Passing an imported file path reloads only the scripts that depend on it (e.g., `/es reload "-shared/common.kt"`).
-* `/es unload all`: Unloads every currently loaded script.
-* `/es unload <script>`: Unloads one script (e.g., `/es unload "hello.kt"`).
-* `/es list`: Lists all currently loaded scripts.
-* `/es check all`: Compiles every script without executing it.
-* `/es check <script>`: Compiles one script without executing it.
+* `/es` or `/es status`: Shows the active generation and its source-file count.
+* `/es reload all`: Compiles and replaces the complete project.
+* `/es reload <source>`: Validates an existing `*.kt` path, then reloads the
+  complete project.
+* `/es unload all`: Unloads the active generation.
+* `/es list`: Lists the source files in the active generation.
+* `/es check all`: Compiles the complete project without activating it.
+* `/es check <source>`: Validates the source path, then checks the complete
+  project.
 * `/es config reload`: Reloads the plugin configuration.
-* `/es cache clear`: Clears the compiled-script cache.
+* `/es cache clear`: Clears the compiled-project cache.
 
-### Script Lifecycle
+Individual files are not independent runtime instances. `/es reload a.kt`
+still prepares and atomically replaces one complete project generation, and
+`/es unload <source>` is therefore unsupported.
 
-Control how your scripts behave, including performing initial setup when loaded and cleaning up resources when unloaded.
+### Ordinary Kotlin Project Model
+
+Every included `*.kt` file under `plugins/EternalScript/scripts/` is compiled
+as part of one ordinary Kotlin/JVM module. Normal Kotlin rules apply:
+
+* `package`, `import`, visibility, overload, class, object, function, property,
+  and type semantics work as they do in a Gradle Kotlin project.
+* Files in the same package can use each other's declarations directly.
+* Files in different packages use ordinary imports.
+* `@file:Import` is not used.
+* A source file containing only shared declarations needs no EternalScript
+  annotation.
+
+For example:
 
 ```kotlin
-enable {
-    // This code runs when the script is loaded/enabled.
-    Bukkit.broadcastMessage("Eternal Script: Script loaded!")
-}
+// state.kt
+package my.server
 
-disable {
-    // This code runs when the script is unloaded/disabled.
-    Bukkit.broadcastMessage("Eternal Script: Script unloaded!")
-}
+var joinCount = 0
+
+fun nextJoinCount(): Int = ++joinCount
 ```
 
-Reloads are transactional. If the replacement script fails during `enable`, EternalScript cleans it up and re-enables the previous working instance. Coroutine `Job` and Bukkit `BukkitTask` instances passed to `track(...)` are cancelled automatically during unload, replacement, and failed-reload cleanup.
-
-### Event Handling
-
-Easily register and handle events directly within your scripts to add custom logic.
-
 ```kotlin
-import org.bukkit.Bukkit
+// listeners.kt
+package my.server
+
+import eternalScript.api.script.EternalScriptEntry
+import eternalScript.core.script.Script
 import org.bukkit.event.player.PlayerJoinEvent
-import org.bukkit.event.player.PlayerQuitEvent
 
-event<PlayerJoinEvent> { event ->
-    Bukkit.broadcastMessage("${event.player.name} joined the server!")
-}
-
-event<PlayerQuitEvent> { event ->
-    Bukkit.broadcastMessage("${event.player.name} left the server.")
-}
-```
-
-### Custom Commands
-
-Define and register your own in-game commands directly from your scripts.
-
-```kotlin
-import org.bukkit.Bukkit
-
-command("test-command") {
-    // Players need this permission to execute the command.
-    permission = "eternals.command.test"
-    executor = { sender, label, args ->
-        // This code runs when the command is executed.
-        Bukkit.broadcastMessage("Command executed by: ${sender.name}")
+@EternalScriptEntry
+internal fun Script.configureListeners() {
+    event<PlayerJoinEvent> { event ->
+        event.player.sendMessage("Join #${nextJoinCount()}")
     }
 }
 ```
 
-### Script Inclusion/Exclusion Rules
+A file that registers lifecycle work declares an `@EternalScriptEntry`
+function; declaration-only files need none. Each file may declare at most one
+entry. An entry is a top-level public or internal, non-suspending extension on
+`Script`; it has no value or type parameters and returns `Unit`. Entry
+functions run in normalized source-path order when a new generation is
+created. Import `EternalScriptEntry` and `Script` directly (an import alias is
+allowed), or use their fully qualified names. Wildcard imports and Kotlin
+`typealias` declarations are intentionally not used to identify entry markers.
 
-Control which scripts the plugin processes.
+Keep ordinary top-level initializers free of external side effects. Kotlin
+initializes JVM file facades when they are first used, so cross-file property
+initializer order is not a lifecycle guarantee. Put Paper changes, I/O, and
+task startup inside an entry's `enable`, event, command, or tracked-task
+callback.
 
-* `*.kt | *.kts`: Includes all Kotlin files (`.kt`) and Kotlin script files (`.kts`).
-* `-*/ *.kt | -*.kt`: Ignores specific folders or files (e.g., excludes scripts in subfolders or specific files).
-* `!*/* .kt | !*.kt`: Loads specific folders or files synchronously (e.g., processes them before other scripts at server startup).
-
-### Installation
-
-It's quick and easy to get EternalScript up and running on your server:
-
-1.  Download the latest version of **EternalScript** from [Modrinth](https://modrinth.com/plugin/eternalscript).
-2.  Upload the downloaded file to your Minecraft server's `plugins` folder.
-3.  Start or restart your server to load EternalScript.
-
-### Getting Started
-
-Experience the power of EternalScript by writing and running your first Kotlin script:
-
-1.  After installation, a `plugins/EternalScript/scripts/` folder will be created.
-2.  Write your Kotlin script file with a `.kt` extension inside this `scripts` folder.
-3.  From the server console, use `/es reload "[script].kt"` to load one script or `/es reload all` to load every script in the folder.
-
-### Simple "Hello World" Example
-
-Create a `hello.kt` file in the `plugins/EternalScript/scripts/` folder and enter the following content:
+### Lifecycle and Transactional Reload
 
 ```kotlin
-// plugins/EternalScript/scripts/hello.kt
+package my.server
 
-enable {
-    Bukkit.broadcastMessage("Hello, world!")
+import eternalScript.api.script.EternalScriptEntry
+import eternalScript.core.script.Script
+import org.bukkit.Bukkit
+
+@EternalScriptEntry
+internal fun Script.configureLifecycle() {
+    enable {
+        Bukkit.broadcastMessage("EternalScript enabled")
+    }
+
+    disable {
+        Bukkit.broadcastMessage("EternalScript disabled")
+    }
 }
 ```
 
-Then, execute `/es reload "hello.kt"` from the server console, and you'll see the message appear in the game chat.
+EternalScript compiles and stages the complete replacement before switching
+generations. If compilation, project initialization, or activation fails, the
+previous working generation remains active or is restored.
+
+The guarantee covers EternalScript-managed listeners, commands, tasks, and
+generation resources. Arbitrary effects performed through Bukkit, another
+plugin, the filesystem, or a network service cannot be rolled back
+automatically. Make lifecycle setup and cleanup idempotent.
+
+Pass coroutine `Job`, Bukkit `BukkitTask`, and Paper/Folia `ScheduledTask`
+instances to `track(...)`. They are cancelled when the generation is unloaded,
+replaced, or cleaned up after failed activation. Reload waits for already
+running managed callbacks for a bounded period; if they do not drain, the
+replacement is aborted.
+
+Every successful reload creates new JVM classes and a new `Script` instance.
+Ordinary top-level mutable properties are initialized again with the new
+generation. Store data that must survive reloads in an explicit persistent
+store.
+
+### Events
+
+```kotlin
+package my.server
+
+import eternalScript.api.script.EternalScriptEntry
+import eternalScript.core.script.Script
+import org.bukkit.Bukkit
+import org.bukkit.event.player.PlayerJoinEvent
+import org.bukkit.event.player.PlayerQuitEvent
+
+@EternalScriptEntry
+internal fun Script.configurePlayerEvents() {
+    event<PlayerJoinEvent> { event ->
+        Bukkit.broadcastMessage("${event.player.name} joined the server")
+    }
+
+    event<PlayerQuitEvent> { event ->
+        Bukkit.broadcastMessage("${event.player.name} left the server")
+    }
+}
+```
+
+### Commands
+
+```kotlin
+package my.server
+
+import eternalScript.api.script.EternalScriptEntry
+import eternalScript.core.script.Script
+import org.bukkit.Bukkit
+
+@EternalScriptEntry
+internal fun Script.configureCommands() {
+    command("test-command") {
+        permission = "eternals.command.test"
+        executor = { sender, _, _ ->
+            Bukkit.broadcastMessage("Command executed by ${sender.name}")
+        }
+    }
+}
+```
+
+Registrations are accepted while the generation is being initialized or
+enabled. Creating new listener or command registrations later from an active
+callback is rejected so replacement and Folia ownership remain deterministic.
+Lifecycle blocks run on the server global scheduler; entity- or region-bound
+Folia work must use the corresponding scheduler.
+
+### Project Sources
+
+Runtime discovery includes files ending in the lowercase `.kt` extension. A file
+is excluded if its name or any parent path segment starts with `-`. Excluded
+directories are useful for bundled examples, but not for shared code required
+by the active project.
+
+Generic `.kts` and the former `.eternal.kts` format are ignored and reported
+as legacy sources. Empty snapshots do not silently unload the active
+generation; use `/es unload all` explicitly.
+
+#### Migrating old script sources
+
+Older executable `.kt` files are discovered immediately, but their script-only
+top-level statements are not valid in an ordinary Kotlin file. They need the
+same entry-function conversion as renamed `.kts` files.
+
+1. Rename each `.kts` or `.eternal.kts` runtime source to `.kt`; keep an
+   existing `.kt` name.
+2. Add normal package declarations and imports.
+3. Wrap executable DSL statements in an annotated `Script` extension:
+
+   ```kotlin
+   @EternalScriptEntry
+   internal fun Script.configureProject() {
+       enable { /* ... */ }
+       event<MyEvent> { /* ... */ }
+   }
+   ```
+
+4. Remove `@file:Import`; put shared declarations in ordinary `.kt` files and
+   access them through their package or imports.
+5. Move required helpers out of paths whose segments begin with `-`.
+6. Run `/es check all`, fix normal Kotlin compiler errors, then reload.
+
+The deprecated `Script.script(String)` and `ScriptManager.script(String)`
+compatibility shims return the same current generation for every known source.
+Do not retain the returned value across a reload. Similarly, the source
+argument to `functions(source)` and `call(source, ...)` is only a
+known-source membership guard in project mode.
+
+### Installation
+
+1. Download EternalScript from [Modrinth](https://modrinth.com/plugin/eternalscript).
+2. Put the JAR in the server's `plugins` directory.
+3. Start or restart the server once to create
+   `plugins/EternalScript/scripts/`.
+
+### Getting Started
+
+Create `plugins/EternalScript/scripts/hello.kt`:
+
+```kotlin
+package my.server
+
+import eternalScript.api.script.EternalScriptEntry
+import eternalScript.core.script.Script
+import org.bukkit.Bukkit
+
+@EternalScriptEntry
+internal fun Script.configureHello() {
+    enable {
+        Bukkit.broadcastMessage("Hello, world!")
+    }
+}
+```
+
+Run `/es reload "hello.kt"` or `/es reload all`. Both commands compile and
+activate the complete project.
+
+### Kotlin Project Workspace
+
+The `script-workspace` module is a normal Gradle Kotlin module. Open the
+repository root in IntelliJ IDEA and edit files under
+`script-workspace/src/main/kotlin`. Package navigation, file-to-file
+references, refactoring, completion, and normal compiler diagnostics require
+no custom Kotlin Scripting definition or IDE-local script configuration.
+
+Run all workspace and bundled-project checks with:
+
+```powershell
+gradle checkScripts --no-daemon --no-watch-fs --console=plain
+```
+
+The checker and Paper runtime use the same source discovery, entry validation,
+module generation, and Kotlin compiler backend. The checker compiles without
+evaluating or activating the project.
+
+### Reload Cost
+
+The Kotlin build-tools compiler keeps a project cache and reuses unchanged
+compilation state. A changed file still produces a complete candidate
+generation JAR because activation remains an all-or-nothing generation swap.
+Compilation happens while the old generation remains available; publication
+only begins after the replacement is ready.

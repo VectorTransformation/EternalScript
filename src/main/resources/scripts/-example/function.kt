@@ -4,6 +4,10 @@
  *
  */
 
+package eternalScript.examples
+
+import org.bukkit.Bukkit
+
 fun f1() {
     Bukkit.broadcastMessage("call: f1")
 }

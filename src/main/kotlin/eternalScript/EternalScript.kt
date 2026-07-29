@@ -9,12 +9,16 @@ import org.bukkit.plugin.java.JavaPlugin
 
 class EternalScript : JavaPlugin() {
     override fun onEnable() {
+        Root.startup()
         Root.register(MainCommand)
         Root.register(DataManager)
         Root.register(MetricsManager)
     }
 
     override fun onDisable() {
+        // DataManager closes script commits, scopes the shutdown drain to its
+        // current operation, and then cancels the shared plugin scope.
+        DataManager.shutdown()
         Root.unregister(ScriptManager)
     }
 }
