@@ -15,7 +15,7 @@ import org.bukkit.command.CommandSender
 object LangManager : Reloader {
     private const val FALLBACK_LANG = "en_us"
     private const val LANG_SCHEMA_KEY = "_schema"
-    private val bundledLanguages = listOf("en_US", "ko_KR")
+    private val bundledLanguages = listOf("en_US", "ko_KR", "ja_JP", "zh_CN")
     private val obsoleteKeys = setOf(
         "config.reload",
         "script.format",
