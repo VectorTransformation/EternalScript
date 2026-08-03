@@ -4,65 +4,260 @@ import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.manager.ConfigManager
-import eternalScript.core.script.Script
+import eternalScript.core.script.classpath.ScriptPluginClasspathRegistry
+import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
+import eternalScript.core.script.classpath.embeddedClasspathFiles
 import eternalScript.core.the.Root
+import com.mojang.brigadier.Command
+import kotlinx.coroutines.Job
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.Json
+import net.kyori.adventure.text.Component
+import org.bukkit.Bukkit
+import org.jetbrains.kotlin.buildtools.api.KotlinToolchains
+import org.jetbrains.kotlin.cli.common.CLICompiler
 import java.io.File
-import java.util.jar.JarEntry
-import java.util.jar.JarFile
-import kotlin.script.experimental.api.*
-import kotlin.script.experimental.jvm.jvm
-import kotlin.script.experimental.jvm.updateClasspath
+import java.net.JarURLConnection
+import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
+import kotlin.reflect.full.IllegalCallableAccessException
+import kotlin.script.experimental.api.ScriptCompilationConfiguration
+import kotlin.script.experimental.jvm.JvmDependency
 import kotlin.script.experimental.jvm.util.classpathFromClassloader
 
-fun pluginClasspath() = Root.plugins().flatMap { plugin ->
-    classpathFromClassloader(plugin.javaClass.classLoader) ?: emptyList()
+internal enum class ClasspathEntryType {
+    REGULAR_FILE,
+    DIRECTORY,
+    OTHER,
+    MISSING
+}
+
+internal data class ClasspathEntrySnapshot(
+    val classpathIndex: Int,
+    val normalizedPath: String,
+    val type: ClasspathEntryType,
+    val size: Long,
+    val lastModifiedSeconds: Long,
+    val lastModifiedNanos: Int,
+    val contentHash: String
+)
+
+private data class ClasspathFileState(
+    val type: ClasspathEntryType,
+    val size: Long,
+    val lastModifiedSeconds: Long,
+    val lastModifiedNanos: Int,
+    val creationSeconds: Long,
+    val creationNanos: Int,
+    val fileKey: String
+)
+
+internal fun coreClasspath(loader: ClassLoader): List<File> {
+    return buildSet {
+        addAll(classpathFromClassloader(loader, true).orEmpty())
+        addAll(loader.embeddedClasspathFiles())
+        runtimeClasspathAnchors()
+            .filter(loader::resolvesSameClass)
+            .mapNotNullTo(this, Class<*>::codeSourceFile)
+    }.map { file -> file.toPath().toAbsolutePath().normalize().toFile() }
+        .filter(File::exists)
+        .distinct()
+}
+
+fun pluginClasspath(): List<File> {
+    val snapshot = ScriptPluginClasspathRegistry.requireCurrent()
+    return buildList {
+        addAll(snapshot.coreFiles)
+        addAll(snapshot.pluginFiles)
+    }.distinctBy { file -> file.toPath().toAbsolutePath().normalize() }
+}
+
+private fun ClassLoader.resolvesSameClass(type: Class<*>): Boolean =
+    runCatching { loadClass(type.name) === type }.getOrDefault(false)
+
+private fun Class<*>.codeSourceFile(): File? =
+    runCatching {
+        protectionDomain
+            ?.codeSource
+            ?.location
+            ?.toClasspathFile()
+    }.getOrNull()?.takeIf(File::exists)
+
+internal fun URL.toClasspathFile(): File? = when (protocol) {
+    "file" -> File(toURI())
+    "jar" -> (openConnection() as? JarURLConnection)
+        ?.jarFileURL
+        ?.toClasspathFile()
+    else -> null
 }
 
 fun libraryClasspath() = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
     Resource.PLUGINS.child(lib).searchAllSequence({ it.extension == "jar" })
 }
 
-private val classpath = buildSet {
-    addAll(pluginClasspath())
-    addAll(libraryClasspath())
-}.toList()
+internal data class ScriptRuntimeClasspath(
+    val files: List<File>,
+    val libraryFiles: List<File>,
+    val fingerprint: String,
+    val pluginSnapshot: ScriptPluginClasspathSnapshot
+)
 
-fun ScriptCompilationConfiguration.Builder.importClasspath(list: List<File>) {
-    val imports = buildSet {
-        list.forEach { file ->
-            JarFile(file).use { jar ->
-                val names = jar.entries().asSequence()
-                    .map(JarEntry::getRealName)
-                    .filter { it.endsWith(".class") }
-                    .filter { !it.startsWith("META-INF") }
-                    .filter { !it.contains("package-info") }
-                    .filter { !it.contains("module-info") }
-                    .map { it.substringBeforeLast(".") }
-                    .map { it.substringBefore("$") }
-                    .map { it.replace("/", ".") }
-                    .distinct()
-
-                addAll(names)
-            }
-        }
+internal fun classpathSnapshot(entries: Iterable<ClasspathEntrySnapshot>): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    entries.forEach { entry ->
+        digest.updateField(entry.classpathIndex.toString())
+        digest.updateField(entry.normalizedPath)
+        digest.updateField(entry.type.name)
+        digest.updateField(entry.size.toString())
+        digest.updateField(entry.lastModifiedSeconds.toString())
+        digest.updateField(entry.lastModifiedNanos.toString())
+        digest.updateField(entry.contentHash)
     }
-
-    defaultImports.append(imports)
+    return digest.digest().toHexString()
 }
 
-object ScriptCompilerConfig : ScriptCompilationConfiguration({
-    baseClass(Script::class)
+private fun runtimeClasspathSnapshot(classpath: List<File>): String =
+    classpathSnapshot(
+        classpath.flatMapIndexed { index, file ->
+            snapshotClasspathRoot(index, file.toPath().toAbsolutePath().normalize())
+        }
+    )
 
-    isStandalone(false)
+internal fun runtimeClasspathFingerprint(
+    classpath: List<File>,
+    rosterFields: Iterable<String>
+): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    digest.updateField(runtimeClasspathSnapshot(classpath))
+    rosterFields.forEach(digest::updateField)
+    return digest.digest().toHexString()
+}
 
-    importClasspath(classpath)
+internal fun scriptRuntimeClasspath(): ScriptRuntimeClasspath {
+    val snapshot = ScriptPluginClasspathRegistry.requireCurrent()
+    return ScriptRuntimeClasspath(
+        files = snapshot.files,
+        libraryFiles = snapshot.libraryFiles,
+        fingerprint = snapshot.fingerprint,
+        pluginSnapshot = snapshot
+    )
+}
 
-    jvm {
-        updateClasspath(classpath)
-        compilerOptions.append("-jvm-target=21")
+private fun snapshotClasspathRoot(index: Int, root: Path): List<ClasspathEntrySnapshot> {
+    val state = root.fileState() ?: return listOf(root.missingSnapshot(index))
+    if (state.type != ClasspathEntryType.DIRECTORY) {
+        return listOf(root.snapshot(index))
     }
 
-    refineConfiguration {
-        onAnnotations<Import>(ScriptImportHandler)
+    return Files.walk(root).use { paths ->
+        paths.toList()
+            .sortedBy(Path::normalizedClasspathPath)
+            .map { path -> path.snapshot(index) }
     }
-})
+}
+
+private fun Path.snapshot(index: Int): ClasspathEntrySnapshot {
+    repeat(MAX_SNAPSHOT_ATTEMPTS) {
+        val before = fileState() ?: return missingSnapshot(index)
+        val contentHash = if (before.type == ClasspathEntryType.REGULAR_FILE) {
+            sha256()
+        } else {
+            ""
+        }
+        val after = fileState()
+        if (before == after) {
+            return ClasspathEntrySnapshot(
+                classpathIndex = index,
+                normalizedPath = normalizedClasspathPath(),
+                type = before.type,
+                size = before.size,
+                lastModifiedSeconds = before.lastModifiedSeconds,
+                lastModifiedNanos = before.lastModifiedNanos,
+                contentHash = contentHash
+            )
+        }
+    }
+    error("Classpath entry changed while its cache fingerprint was being calculated: $this")
+}
+
+private fun Path.missingSnapshot(index: Int) = ClasspathEntrySnapshot(
+    classpathIndex = index,
+    normalizedPath = normalizedClasspathPath(),
+    type = ClasspathEntryType.MISSING,
+    size = -1,
+    lastModifiedSeconds = 0,
+    lastModifiedNanos = 0,
+    contentHash = ""
+)
+
+private fun Path.fileState(): ClasspathFileState? {
+    val attributes = try {
+        Files.readAttributes(this, BasicFileAttributes::class.java)
+    } catch (_: NoSuchFileException) {
+        return null
+    }
+    val modified = attributes.lastModifiedTime().toInstant()
+    val created = attributes.creationTime().toInstant()
+    val type = when {
+        attributes.isRegularFile -> ClasspathEntryType.REGULAR_FILE
+        attributes.isDirectory -> ClasspathEntryType.DIRECTORY
+        else -> ClasspathEntryType.OTHER
+    }
+    return ClasspathFileState(
+        type = type,
+        size = attributes.size(),
+        lastModifiedSeconds = modified.epochSecond,
+        lastModifiedNanos = modified.nano,
+        creationSeconds = created.epochSecond,
+        creationNanos = created.nano,
+        fileKey = attributes.fileKey()?.toString().orEmpty()
+    )
+}
+
+private fun Path.sha256(): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    Files.newInputStream(this).use { input ->
+        val buffer = ByteArray(HASH_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+    }
+    return digest.digest().toHexString()
+}
+
+private fun Path.normalizedClasspathPath() =
+    toAbsolutePath().normalize().toString().replace(File.separatorChar, '/')
+
+private fun MessageDigest.updateField(value: String) {
+    val bytes = value.toByteArray(StandardCharsets.UTF_8)
+    update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
+    update(bytes)
+}
+
+private const val MAX_SNAPSHOT_ATTEMPTS = 3
+private const val HASH_BUFFER_SIZE = 64 * 1024
+
+@OptIn(org.jetbrains.kotlin.buildtools.api.ExperimentalBuildToolsApi::class)
+private fun runtimeClasspathAnchors() = listOf(
+    Root.INSTANCE.javaClass,
+    Unit::class.java,
+    IllegalCallableAccessException::class.java,
+    KSerializer::class.java,
+    Json::class.java,
+    ScriptCompilationConfiguration::class.java,
+    JvmDependency::class.java,
+    CLICompiler::class.java,
+    KotlinToolchains::class.java,
+    Job::class.java,
+    Bukkit::class.java,
+    Component::class.java,
+    Command::class.java
+)

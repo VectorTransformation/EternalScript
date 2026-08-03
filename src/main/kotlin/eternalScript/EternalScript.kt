@@ -9,12 +9,13 @@ import org.bukkit.plugin.java.JavaPlugin
 
 class EternalScript : JavaPlugin() {
     override fun onEnable() {
+        Root.startup()
         Root.register(MainCommand)
-        Root.register(DataManager)
-        Root.register(MetricsManager)
+        Root.start(DataManager)
+        Root.start(MetricsManager)
     }
 
     override fun onDisable() {
-        Root.unregister(ScriptManager)
+        Root.stop(DataManager, ScriptManager)
     }
 }

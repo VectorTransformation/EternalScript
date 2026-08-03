@@ -2,10 +2,8 @@ plugins {
     `java-library`
     // https://kotlinlang.org/docs/releases.html
     kotlin("jvm")
-    // https://github.com/Kotlin/kotlinx.serialization
-    kotlin("plugin.serialization")
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
     // https://github.com/jpenilla/run-task
     id("xyz.jpenilla.run-paper") version "3.0.2"
     // https://github.com/jpenilla/resource-factory
@@ -13,10 +11,12 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "1.0.8"
-val javaVersion = 21
-val pluginApiVersion = "1.21.8"
-val minecraftVersion = "1.21.11"
+val pluginVersion = "2.0.0"
+val javaVersion = 25
+val pluginApiVersion = "26.2"
+val minecraftVersion = "26.2"
+val paperBuild = "87-stable"
+val paperVersion = "$minecraftVersion.build.$paperBuild"
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -42,20 +42,37 @@ val minecraftArgs = listOf(
     "-Dusing.aikars.flags=https://mcflags.emc.gs",
     "-Daikars.new.flags=true"
 )
-val kotlinVersion: String by project
+val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
+val projectJavaLauncher = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(javaVersion))
+}
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    paperweight.paperDevBundle("$minecraftVersion-R0.1-SNAPSHOT")
+    paperweight.paperDevBundle(paperVersion)
     compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
     compileOnly(kotlin("reflect", kotlinVersion))
-    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    compileOnly(kotlin("scripting-common", kotlinVersion))
     compileOnly(kotlin("scripting-jvm", kotlinVersion))
-    compileOnly(kotlin("scripting-jvm-host", kotlinVersion))
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    compileOnly(kotlin("compiler-embeddable", kotlinVersion))
+    compileOnly("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
+    compileOnly("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
+    // Paper's Maven resolver does not use Gradle module variants. Declare the
+    // JVM artifact directly so it wins over Kotlin compiler's older transitive
+    // coroutines runtime.
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+    testImplementation(kotlin("test", kotlinVersion))
+    testImplementation(kotlin("compiler-embeddable", kotlinVersion))
+    testImplementation(kotlin("scripting-common", kotlinVersion))
+    testImplementation(kotlin("scripting-jvm", kotlinVersion))
+    testImplementation("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
+    testImplementation("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
 }
 
 fun libraries(): String {
@@ -82,7 +99,19 @@ fun addLibraries() {
 tasks {
     runServer {
         minecraftVersion(minecraftVersion)
+        javaLauncher.set(projectJavaLauncher)
         jvmArgs(minecraftArgs)
+    }
+    test {
+        maxHeapSize = "1G"
+    }
+    register("checkScripts") {
+        group = "verification"
+        description = "Checks the workspace and bundled reloadable Kotlin projects without evaluating them."
+        dependsOn(":script-workspace:checkScripts")
+    }
+    check {
+        dependsOn("checkScripts")
     }
     processResources {
         doLast {
@@ -95,10 +124,6 @@ tasks {
     jar {
         version = pluginVersion()
     }
-}
-
-java {
-    toolchain.languageVersion = JavaLanguageVersion.of(javaVersion)
 }
 
 kotlin {

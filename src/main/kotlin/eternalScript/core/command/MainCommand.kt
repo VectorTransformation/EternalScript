@@ -1,131 +1,105 @@
 package eternalScript.core.command
 
 import com.mojang.brigadier.Command
-import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.api.command.CommandBuilder
-import eternalScript.core.data.Resource
-import eternalScript.core.extension.wrap
+import eternalScript.core.feedback.UserFeedback
+import eternalScript.core.feedback.UserFeedbackChannels
+import eternalScript.core.feedback.UserFeedbackEvent
 import eternalScript.core.manager.DataManager
-import eternalScript.core.manager.ReloadManager
-import eternalScript.core.manager.ScriptManager
-import eternalScript.core.the.Root
+import eternalScript.core.workspace.WorkspaceManager
 import io.papermc.paper.command.brigadier.CommandSourceStack
 
+/** Administrative command surface for the one active Kotlin script project. */
 object MainCommand : CommandBuilder() {
     override val builder = builder("eternalscript") {
         requires(::isOp)
-        then(builder("compile") {
-            executes(::compile)
+        executes(::status)
+        then(builder("reload") {
+            executes(::reload)
         })
-        then(builder("clear") {
-            executes(::clear)
-        })
-        then(builder("config") {
-            executes(::config)
-        })
-        then(builder("call") {
-            then(builder("script", StringArgumentType.string()) {
-                suggests { _, builder ->
-                    ScriptManager.scripts().map(String::wrap).filter {
-                        it.lowercase().startsWith(builder.remainingLowerCase)
-                    }.forEach {
-                        builder.suggest(it)
-                    }
-                    builder.buildFuture()
-                }
-                then(builder("function", StringArgumentType.string()) {
-                    suggests { context, builder ->
-                        val script = StringArgumentType.getString(context, "script")
-                        ScriptManager.functions(script).map(String::wrap).filter {
-                            it.lowercase().startsWith(builder.remainingLowerCase)
-                        }.forEach {
-                            builder.suggest(it)
-                        }
-                        builder.buildFuture()
-                    }
-                    executes(::call)
-                })
-            })
-        })
-        then(builder("load") {
-            then(builder("script", StringArgumentType.string()) {
-                suggests { _, builder ->
-                    DataManager.scriptPaths().map(String::wrap).filter {
-                        it.lowercase().startsWith(builder.remainingLowerCase)
-                    }.forEach {
-                        builder.suggest(it)
-                    }
-                    builder.buildFuture()
-                }
-                executes(::load)
-            })
+        then(builder("check") {
+            executes(::check)
         })
         then(builder("unload") {
-            then(builder("script", StringArgumentType.string()) {
-                suggests { _, builder ->
-                    ScriptManager.scripts().map(String::wrap).filter {
-                        it.lowercase().startsWith(builder.remainingLowerCase)
-                    }.forEach {
-                        builder.suggest(it)
-                    }
-                    builder.buildFuture()
-                }
-                executes(::unload)
-            })
+            executes(::unload)
         })
         then(builder("list") {
             executes(::list)
         })
+        then(builder("status") {
+            executes(::status)
+        })
+        then(builder("workspace") {
+            executes(::workspaceStatus)
+            then(builder("update") {
+                executes(::workspaceUpdate)
+            })
+        })
+        then(builder("config") {
+            then(builder("reload") {
+                executes(::reloadConfig)
+            })
+        })
+        then(builder("cache") {
+            then(builder("clear") {
+                executes(::clearCache)
+            })
+        })
     }
     override val aliases = listOf("es")
 
-    fun compile(context: CommandContext<CommandSourceStack>): Int {
-        val sender = context.source.sender
-        DataManager.compile(sender)
-        return Command.SINGLE_SUCCESS
-    }
+    fun reload(context: CommandContext<CommandSourceStack>): Int =
+        result(DataManager.reload(feedback(context)))
 
-    fun clear(context: CommandContext<CommandSourceStack>): Int {
-        val sender = context.source.sender
-        ScriptManager.clear(sender)
-        return Command.SINGLE_SUCCESS
-    }
+    fun check(context: CommandContext<CommandSourceStack>): Int =
+        result(DataManager.check(feedback(context)))
 
-    fun config(context: CommandContext<CommandSourceStack>): Int {
-        val sender = context.source.sender
-        ReloadManager.reload(sender, false)
-        return Command.SINGLE_SUCCESS
-    }
-
-    fun call(context: CommandContext<CommandSourceStack>): Int {
-        val script = StringArgumentType.getString(context, "script")
-        val function = StringArgumentType.getString(context, "function")
-        ScriptManager.call(script, function)
-        return Command.SINGLE_SUCCESS
-    }
-
-    fun load(context: CommandContext<CommandSourceStack>): Int {
-        val script = StringArgumentType.getString(context, "script")
-        if (script !in DataManager.scriptPaths()) return Command.SINGLE_SUCCESS
-        Root.launch {
-            val file = Resource.PLUGINS.child(script)
-            val sender = context.source.sender
-            DataManager.loadAsync(file, sender)
-        }
-        return Command.SINGLE_SUCCESS
-    }
-
-    fun unload(context: CommandContext<CommandSourceStack>): Int {
-        val script = StringArgumentType.getString(context, "script")
-        val sender = context.source.sender
-        ScriptManager.remove(script, sender)
-        return Command.SINGLE_SUCCESS
-    }
+    fun unload(context: CommandContext<CommandSourceStack>): Int =
+        result(DataManager.unload(feedback(context)))
 
     fun list(context: CommandContext<CommandSourceStack>): Int {
-        val sender = context.source.sender
-        ScriptManager.scriptList(sender)
+        val status = DataManager.projectStatus()
+        feedback(context).emit(
+            UserFeedbackEvent.ProjectEntries(
+                entries = status.generation.entryNames,
+                diskSourceCount = status.availableSources.size,
+                activeProject = status.generation.exists
+            )
+        )
         return Command.SINGLE_SUCCESS
     }
+
+    fun status(context: CommandContext<CommandSourceStack>): Int {
+        feedback(context).emit(
+            UserFeedbackEvent.ProjectStatusView(
+                project = DataManager.projectStatus(),
+                workspace = WorkspaceManager.status()
+            )
+        )
+        return Command.SINGLE_SUCCESS
+    }
+
+    fun workspaceStatus(context: CommandContext<CommandSourceStack>): Int {
+        feedback(context).emit(
+            UserFeedbackEvent.WorkspaceStatusView(WorkspaceManager.status())
+        )
+        return Command.SINGLE_SUCCESS
+    }
+
+    fun workspaceUpdate(context: CommandContext<CommandSourceStack>): Int =
+        result(DataManager.refreshWorkspace(feedback(context)))
+
+    fun reloadConfig(context: CommandContext<CommandSourceStack>): Int =
+        result(DataManager.reloadConfig(feedback(context)))
+
+    fun clearCache(context: CommandContext<CommandSourceStack>): Int =
+        result(DataManager.clearCache(feedback(context)))
+
+    private fun feedback(context: CommandContext<CommandSourceStack>): UserFeedback =
+        UserFeedbackChannels.reply(context.source.sender)
+
+    private fun result(accepted: Boolean): Int =
+        if (accepted) Command.SINGLE_SUCCESS else 0
+
 }
