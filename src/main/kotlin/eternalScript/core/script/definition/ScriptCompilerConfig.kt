@@ -4,6 +4,9 @@ import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.manager.ConfigManager
+import eternalScript.core.script.classpath.ScriptPluginClasspathRegistry
+import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
+import eternalScript.core.script.classpath.embeddedClasspathFiles
 import eternalScript.core.the.Root
 import com.mojang.brigadier.Command
 import kotlinx.coroutines.Job
@@ -23,7 +26,6 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.full.IllegalCallableAccessException
 import kotlin.script.experimental.api.ScriptCompilationConfiguration
 import kotlin.script.experimental.jvm.JvmDependency
@@ -56,22 +58,24 @@ private data class ClasspathFileState(
     val fileKey: String
 )
 
-private data class CachedContentHash(
-    val state: ClasspathFileState,
-    val hash: String
-)
-
-private val classpathContentHashCache = ConcurrentHashMap<String, CachedContentHash>()
-
-fun pluginClasspath(): List<File> {
-    val loader = Root.classLoader(ConfigManager.value(Config.CLASS_LOADER))
-        ?: Root.INSTANCE.javaClass.classLoader
+internal fun coreClasspath(loader: ClassLoader): List<File> {
     return buildSet {
         addAll(classpathFromClassloader(loader, true).orEmpty())
+        addAll(loader.embeddedClasspathFiles())
         runtimeClasspathAnchors()
             .filter(loader::resolvesSameClass)
             .mapNotNullTo(this, Class<*>::codeSourceFile)
-    }.toList()
+    }.map { file -> file.toPath().toAbsolutePath().normalize().toFile() }
+        .filter(File::exists)
+        .distinct()
+}
+
+fun pluginClasspath(): List<File> {
+    val snapshot = ScriptPluginClasspathRegistry.requireCurrent()
+    return buildList {
+        addAll(snapshot.coreFiles)
+        addAll(snapshot.pluginFiles)
+    }.distinctBy { file -> file.toPath().toAbsolutePath().normalize() }
 }
 
 private fun ClassLoader.resolvesSameClass(type: Class<*>): Boolean =
@@ -100,7 +104,8 @@ fun libraryClasspath() = ConfigManager.value<List<String>>(Config.LIBS).flatMap 
 internal data class ScriptRuntimeClasspath(
     val files: List<File>,
     val libraryFiles: List<File>,
-    val fingerprint: String
+    val fingerprint: String,
+    val pluginSnapshot: ScriptPluginClasspathSnapshot
 )
 
 internal fun classpathSnapshot(entries: Iterable<ClasspathEntrySnapshot>): String {
@@ -124,17 +129,23 @@ private fun runtimeClasspathSnapshot(classpath: List<File>): String =
         }
     )
 
+internal fun runtimeClasspathFingerprint(
+    classpath: List<File>,
+    rosterFields: Iterable<String>
+): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    digest.updateField(runtimeClasspathSnapshot(classpath))
+    rosterFields.forEach(digest::updateField)
+    return digest.digest().toHexString()
+}
+
 internal fun scriptRuntimeClasspath(): ScriptRuntimeClasspath {
-    val libraryFiles = libraryClasspath()
-        .distinctBy { file -> file.toPath().toAbsolutePath().normalize() }
-    val files = buildSet {
-        addAll(pluginClasspath())
-        addAll(libraryFiles)
-    }.toList()
+    val snapshot = ScriptPluginClasspathRegistry.requireCurrent()
     return ScriptRuntimeClasspath(
-        files = files,
-        libraryFiles = libraryFiles,
-        fingerprint = runtimeClasspathSnapshot(files)
+        files = snapshot.files,
+        libraryFiles = snapshot.libraryFiles,
+        fingerprint = snapshot.fingerprint,
+        pluginSnapshot = snapshot
     )
 }
 
@@ -155,7 +166,7 @@ private fun Path.snapshot(index: Int): ClasspathEntrySnapshot {
     repeat(MAX_SNAPSHOT_ATTEMPTS) {
         val before = fileState() ?: return missingSnapshot(index)
         val contentHash = if (before.type == ClasspathEntryType.REGULAR_FILE) {
-            contentHash(before)
+            sha256()
         } else {
             ""
         }
@@ -171,7 +182,6 @@ private fun Path.snapshot(index: Int): ClasspathEntrySnapshot {
                 contentHash = contentHash
             )
         }
-        classpathContentHashCache.remove(normalizedClasspathPath())
     }
     error("Classpath entry changed while its cache fingerprint was being calculated: $this")
 }
@@ -208,17 +218,6 @@ private fun Path.fileState(): ClasspathFileState? {
         creationNanos = created.nano,
         fileKey = attributes.fileKey()?.toString().orEmpty()
     )
-}
-
-private fun Path.contentHash(state: ClasspathFileState): String {
-    val key = normalizedClasspathPath()
-    return classpathContentHashCache.compute(key) { _, cached ->
-        if (cached?.state == state) {
-            cached
-        } else {
-            CachedContentHash(state, sha256())
-        }
-    }!!.hash
 }
 
 private fun Path.sha256(): String {

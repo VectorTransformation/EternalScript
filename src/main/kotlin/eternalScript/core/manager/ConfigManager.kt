@@ -1,32 +1,24 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.Reloader
 import eternalScript.core.data.Config
 import eternalScript.core.data.Resource
-import org.bukkit.command.CommandSender
 import org.bukkit.configuration.file.YamlConfiguration
 import java.io.File
 
-object ConfigManager : Reloader {
+object ConfigManager {
     private val cache = mutableMapOf<String, Any>()
-    private val removedKeys = setOf("scripts")
 
-    override fun reload(sender: CommandSender?, silent: Boolean) {
+    fun reload() {
         val file = Resource.CONFIG.make()
         val map = Config.entries.associate {
             it.key to Pair(it.value, it.comment)
         }.toSortedMap()
         val yml = YamlConfiguration.loadConfiguration(file)
         val keys = yml.getKeys(true)
-        val removed = removedKeys.filter(yml::contains)
-        removed.forEach {
-            yml.set(it, null)
-            cache.remove(it)
-        }
         val filter = map.filter {
             it.key !in keys
         }
-        if (filter.isNotEmpty() || removed.isNotEmpty()) {
+        if (filter.isNotEmpty()) {
             set(filter, yml, file)
         }
         map.forEach { entry ->

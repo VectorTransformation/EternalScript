@@ -171,7 +171,7 @@ class ScriptProjectSourceTest {
 
     @Test
     fun `non Kotlin source extensions are rejected`() {
-        listOf("legacy.kts", "legacy.eternal.kts", "UPPER.KT", "notes.txt").forEach { path ->
+        listOf("source.java", "source.txt", "UPPER.KT", "source.md").forEach { path ->
             assertFailsWith<IllegalArgumentException>(path) {
                 ScriptProjectSource.compose(
                     listOf(ScriptProjectFile(path, "fun valid() = Unit"))

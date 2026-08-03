@@ -77,6 +77,7 @@ internal data class KotlinIncrementalProjectCacheCleanup(
 internal class KotlinIncrementalProjectCompiler(
     cacheRoot: Path,
     classpath: List<Path>,
+    private val classpathIdentity: String = "",
     implementationClassLoader: ClassLoader =
         Thread.currentThread().contextClassLoader
             ?: KotlinIncrementalProjectCompiler::class.java.classLoader
@@ -175,7 +176,7 @@ internal class KotlinIncrementalProjectCompiler(
                 ) {
                     this[BaseCompilationOperation.COMPILER_MESSAGE_RENDERER] = renderer
                     compilerArguments[JvmCompilerArguments.CLASSPATH] = normalizedClasspath
-                    compilerArguments[JvmCompilerArguments.JVM_TARGET] = JvmTarget.JVM_21
+                    compilerArguments[JvmCompilerArguments.JVM_TARGET] = JvmTarget.JVM_25
                     compilerArguments[JvmCompilerArguments.MODULE_NAME] = MODULE_NAME
                     compilerArguments[JvmCompilerArguments.NO_STDLIB] = true
                     compilerArguments[JvmCompilerArguments.NO_REFLECT] = true
@@ -454,6 +455,7 @@ internal class KotlinIncrementalProjectCompiler(
 
     private fun classpathState(): ClasspathState {
         val digest = MessageDigest.getInstance("SHA-256")
+        digest.updateField(classpathIdentity)
         val entries = normalizedClasspath.mapIndexed { index, path ->
             require(Files.exists(path)) {
                 "Compilation classpath entry does not exist: $path"
@@ -500,7 +502,7 @@ internal class KotlinIncrementalProjectCompiler(
         digest.updateField(CACHE_SCHEMA)
         digest.updateField(toolchains.getCompilerVersion())
         digest.updateField(MODULE_NAME)
-        digest.updateField(JvmTarget.JVM_21.stringValue)
+        digest.updateField(JvmTarget.JVM_25.stringValue)
         digest.updateField(module.fingerprint)
         digest.updateField(classpathFingerprint)
         return digest.digest().toHexString()
@@ -510,13 +512,6 @@ internal class KotlinIncrementalProjectCompiler(
         target: Path,
         module: ScriptProjectModule
     ): Path {
-        val bootstrapClass = classesDirectory.resolve(
-            GENERATED_BOOTSTRAP_CLASS.replace('.', '/') + ".class"
-        )
-        check(bootstrapClass.isRegularFile()) {
-            "Compiled project did not contain $GENERATED_BOOTSTRAP_CLASS."
-        }
-
         val files = Files.walk(classesDirectory).use { paths ->
             paths.filter(Path::isRegularFile)
                 .sorted(compareBy { path ->
@@ -588,7 +583,6 @@ internal class KotlinIncrementalProjectCompiler(
             return false
         }
         val requiredEntries = buildSet {
-            add(GENERATED_BOOTSTRAP_CLASS.replace('.', '/') + ".class")
             module.files.mapNotNullTo(this) { file ->
                 file.facadeClassName?.replace('.', '/')?.plus(".class")
             }

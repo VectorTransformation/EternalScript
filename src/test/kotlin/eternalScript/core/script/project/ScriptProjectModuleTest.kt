@@ -12,7 +12,6 @@ import java.nio.file.Files
 import kotlin.script.experimental.jvm.util.classpathFromClassloader
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -84,112 +83,6 @@ class ScriptProjectModuleTest {
     }
 
     @Test
-    fun `entry aliases compile and bootstrap calls entries by normalized path`() {
-        val project = ScriptProjectSource.compose(
-            listOf(
-                ScriptProjectFile(
-                    "zeta.kt",
-                    """
-                    package demo.zeta
-
-                    import eternalScript.api.script.EternalScriptEntry
-                    import eternalScript.core.script.Script
-
-                    @EternalScriptEntry
-                    fun Script.loadZeta() = Unit
-                    """.trimIndent()
-                ),
-                ScriptProjectFile(
-                    "Alpha.kt",
-                    """
-                    package demo.alpha
-
-                    import eternalScript.api.script.EternalScriptEntry as Entry
-                    import eternalScript.core.script.Script as RuntimeScript
-
-                    @Entry
-                    internal fun RuntimeScript.loadAlpha(): Unit = Unit
-                    """.trimIndent()
-                )
-            )
-        )
-
-        val module = project.module
-        val result = compile(module)
-        val entries = module.files.mapNotNull(ScriptProjectModuleFile::entryPoint)
-            .associateBy { entry -> entry.sourcePosition.sourceName }
-        val runtime = module.files.single { file ->
-            file.name == "-eternalscript-generated/EternalScriptProjectRuntime.kt"
-        }
-        val alpha = assertNotNull(entries["Alpha.kt"])
-        val zeta = assertNotNull(entries["zeta.kt"])
-
-        assertEquals(ExitCode.OK, result.exitCode, result.messages.joinToString("\n"))
-        assertTrue(runtime.text.contains("import demo.alpha.loadAlpha as ${alpha.importAlias}"))
-        assertTrue(runtime.text.contains("import demo.zeta.loadZeta as ${zeta.importAlias}"))
-        assertTrue(
-            runtime.text.indexOf("script.${alpha.importAlias}()") <
-                runtime.text.indexOf("script.${zeta.importAlias}()")
-        )
-    }
-
-    @Test
-    fun `default package entry compiles through a bootstrap import alias`() {
-        val project = ScriptProjectSource.compose(
-            listOf(
-                ScriptProjectFile(
-                    "default.kt",
-                    """
-                    import eternalScript.api.script.EternalScriptEntry
-                    import eternalScript.core.script.Script
-
-                    @EternalScriptEntry
-                    internal fun Script.loadDefault(): Unit = Unit
-                    """.trimIndent()
-                )
-            )
-        )
-
-        val result = compile(project.module)
-
-        assertEquals(ExitCode.OK, result.exitCode, result.messages.joinToString("\n"))
-    }
-
-    @Test
-    fun `bootstrap entry call maps to the entry declaration`() {
-        val project = ScriptProjectSource.compose(
-            listOf(
-                ScriptProjectFile(
-                    "nested/entry.kt",
-                    """
-                    package demo
-
-                    import eternalScript.api.script.EternalScriptEntry
-                    import eternalScript.core.script.Script
-
-                    @EternalScriptEntry
-                    internal fun Script.install(): Unit = Unit
-                    """.trimIndent()
-                )
-            )
-        )
-        val module = project.module
-        val entry = assertNotNull(
-            module.files.single { file -> file.name == "nested/entry.kt" }.entryPoint
-        )
-        val runtime = module.files.single { file ->
-            file.name == "-eternalscript-generated/EternalScriptProjectRuntime.kt"
-        }
-        val callOffset = runtime.text.lastIndexOf(entry.importAlias)
-        val (line, column) = runtime.text.position(callOffset)
-
-        assertEquals(
-            entry.sourcePosition,
-            module.position(runtime.name, line, column)
-        )
-    }
-
-    @Test
     fun `ordinary compiler diagnostics retain original path line and column`() {
         val project = ScriptProjectSource.compose(
             listOf(
@@ -244,7 +137,6 @@ class ScriptProjectModuleTest {
 
         assertEquals(source, moduleFile.text)
         assertEquals("demo.CustomFacade", moduleFile.facadeClassName)
-        assertEquals("demo.CustomFacade", moduleFile.exportClassName)
         assertEquals(ExitCode.OK, result.exitCode, result.messages.joinToString("\n"))
     }
 
@@ -281,130 +173,7 @@ class ScriptProjectModuleTest {
         assertEquals(secondSource, second.text)
         assertEquals("demo.SharedFacade__FirstKt", first.facadeClassName)
         assertEquals("demo.SharedFacade__SecondKt", second.facadeClassName)
-        assertEquals("demo.SharedFacade", first.exportClassName)
-        assertEquals("demo.SharedFacade", second.exportClassName)
         assertEquals(ExitCode.OK, result.exitCode, result.messages.joinToString("\n"))
-    }
-
-    @Test
-    fun `rejects multiple entry functions in one source file`() {
-        val exception = assertFailsWith<ScriptProjectCompositionException> {
-            ScriptProjectSource.compose(
-                listOf(
-                    ScriptProjectFile(
-                        "duplicate.kt",
-                        """
-                        import eternalScript.api.script.EternalScriptEntry
-                        import eternalScript.core.script.Script
-
-                        @EternalScriptEntry
-                        fun Script.first() = Unit
-
-                        @EternalScriptEntry
-                        fun Script.second() = Unit
-                        """.trimIndent()
-                    )
-                )
-            ).module
-        }
-
-        assertTrue(exception.message.orEmpty().contains("at most one"))
-    }
-
-    @Test
-    fun `rejects entry declarations outside the ordinary entry contract`() {
-        val invalidSources = listOf(
-            "@EternalScriptEntry private fun Script.invalid() = Unit" to "public or internal",
-            "@EternalScriptEntry suspend fun Script.invalid() = Unit" to "must not be suspend",
-            "@EternalScriptEntry fun <T> Script.invalid() = Unit" to "type parameters",
-            "@EternalScriptEntry fun Script.invalid(value: Int) = Unit" to "value parameters",
-            "@EternalScriptEntry fun String.invalid() = Unit" to "receiver must be exactly",
-            "@EternalScriptEntry fun Script.invalid(): Int = 1" to "return kotlin.Unit",
-            "class Nested { @EternalScriptEntry fun Script.invalid() = Unit }" to "top-level"
-        )
-
-        invalidSources.forEach { (declaration, expectedMessage) ->
-            val exception = assertFailsWith<ScriptProjectCompositionException>(declaration) {
-                ScriptProjectSource.compose(
-                    listOf(
-                        ScriptProjectFile(
-                            "invalid.kt",
-                            """
-                            import eternalScript.api.script.EternalScriptEntry
-                            import eternalScript.core.script.Script
-
-                            $declaration
-                            """.trimIndent()
-                        )
-                    )
-                ).module
-            }
-            assertTrue(
-                exception.message.orEmpty().contains(expectedMessage),
-                exception.message
-            )
-        }
-    }
-
-    @Test
-    fun `bootstrap enforces inferred Unit entry return type`() {
-        val project = ScriptProjectSource.compose(
-            listOf(
-                ScriptProjectFile(
-                    "non-unit.kt",
-                    """
-                    import eternalScript.api.script.EternalScriptEntry
-                    import eternalScript.core.script.Script
-
-                    @EternalScriptEntry
-                    fun Script.invalid() = 1
-                    """.trimIndent()
-                )
-            )
-        )
-
-        val result = compile(project.module)
-        val error = assertNotNull(
-            result.messages.firstOrNull { message ->
-                message.severity.isError && message.location != null
-            }
-        )
-        val location = assertNotNull(error.location)
-        val mapped = project.module.position(
-            assertNotNull(location.path),
-            location.line,
-            location.column
-        )
-
-        assertEquals("non-unit.kt", mapped?.sourceName)
-        assertEquals(5, mapped?.line)
-    }
-
-    @Test
-    fun `wildcard imports do not make a local marker an EternalScript entry`() {
-        val project = ScriptProjectSource.compose(
-            listOf(
-                ScriptProjectFile(
-                    "local-marker.kt",
-                    """
-                    package project.local
-
-                    import eternalScript.api.script.*
-                    import eternalScript.core.script.Script
-
-                    annotation class EternalScriptEntry
-
-                    @EternalScriptEntry
-                    fun Script.notAnEntry() = Unit
-                    """.trimIndent()
-                )
-            )
-        )
-
-        assertEquals(
-            null,
-            project.module.files.single { file -> file.name == "local-marker.kt" }.entryPoint
-        )
     }
 
     private fun compile(module: ScriptProjectModule): CompilerResult {
@@ -425,7 +194,7 @@ class ScriptProjectModuleTest {
             val arguments = K2JVMCompilerArguments().apply {
                 destination = classes.absolutePath
                 this.classpath = classpath
-                jvmTarget = "21"
+                jvmTarget = "25"
                 moduleName = "eternal-script-module-test"
                 noStdlib = true
                 noReflect = true

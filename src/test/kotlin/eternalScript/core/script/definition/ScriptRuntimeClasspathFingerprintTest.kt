@@ -1,6 +1,7 @@
 package eternalScript.core.script.definition
 
 import java.nio.file.Files
+import java.nio.file.attribute.FileTime
 import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import kotlin.test.Test
@@ -43,6 +44,30 @@ class ScriptRuntimeClasspathFingerprintTest {
                 )
             )
         )
+    }
+
+    @Test
+    fun `content changes invalidate fingerprint even when size and timestamp are restored`() {
+        val jar = Files.createTempFile("eternal-script-fingerprint", ".jar")
+        try {
+            Files.write(jar, "content-a".toByteArray())
+            val timestamp = Files.getLastModifiedTime(jar)
+            val first = runtimeClasspathFingerprint(
+                classpath = listOf(jar.toFile()),
+                rosterFields = emptyList()
+            )
+
+            Files.write(jar, "content-b".toByteArray())
+            Files.setLastModifiedTime(jar, FileTime.from(timestamp.toInstant()))
+            val second = runtimeClasspathFingerprint(
+                classpath = listOf(jar.toFile()),
+                rosterFields = emptyList()
+            )
+
+            assertNotEquals(first, second)
+        } finally {
+            Files.deleteIfExists(jar)
+        }
     }
 
     @Test

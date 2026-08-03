@@ -7,12 +7,28 @@ enum class Config(
     val value: Any,
     val comment: List<String> = emptyList()
 ) {
-    CLASS_LOADER("class-loader", Root.ORIGIN),
-    DEBUG("debug", true),
-    LIBS("libs", listOf(
-        "${Root.ORIGIN}/libs",
-    )),
-    METRICS("metrics", true),
-    LANG("lang", "en_US")
+    LANG(
+        "lang",
+        "en_US",
+        listOf(
+            "User-facing language: en_US, ko_KR, ja_JP, zh_CN,",
+            "or the filename of a custom lang/*.json catalog."
+        )
+    ),
+    LIBS(
+        "libs",
+        listOf("${Root.ORIGIN}/libs"),
+        listOf("Directories containing additional compile/runtime libraries.")
+    ),
+    DEBUG(
+        "debug",
+        false,
+        listOf("Log full compiler and lifecycle exception stack traces.")
+    ),
+    METRICS(
+        "metrics",
+        true,
+        listOf("Send anonymous bStats usage metrics.")
+    )
     ;
 }

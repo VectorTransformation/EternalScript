@@ -1,17 +1,20 @@
 package eternalScript.workspace
 
-import eternalScript.api.script.EternalScriptEntry
-import eternalScript.core.script.Script
+import eternalScript.api.script.EternalScript
+import net.kyori.adventure.text.Component
 import org.bukkit.Bukkit
 import org.bukkit.event.player.PlayerJoinEvent
 
-@EternalScriptEntry
-internal fun Script.configureHello() {
-    enable {
-        Bukkit.broadcastMessage("Hello from the EternalScript workspace!")
-    }
+class WorkspaceHello : EternalScript() {
+    override fun onEnable() {
+        Bukkit.getServer().broadcast(
+            Component.text("Hello from the EternalScript workspace!")
+        )
 
-    event<PlayerJoinEvent> { event ->
-        Bukkit.broadcastMessage(joinMessage(event.player.name))
+        event<PlayerJoinEvent> { event ->
+            Bukkit.getServer().broadcast(
+                Component.text(joinMessage(event.player.name))
+            )
+        }
     }
 }

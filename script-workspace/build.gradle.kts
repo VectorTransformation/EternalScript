@@ -6,12 +6,17 @@ plugins {
     kotlin("jvm")
 }
 
-val javaVersion = 21
-val minecraftVersion = "1.21.11"
+val javaVersion = 25
+val minecraftVersion = "26.2"
+val paperBuild = "87-stable"
+val paperVersion = "$minecraftVersion.build.$paperBuild"
 val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
+val projectJavaLauncher = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(javaVersion))
+}
 val scriptSourceRoot = layout.projectDirectory.dir("src/main/kotlin")
 val bundledScriptRoot = rootProject.layout.projectDirectory.dir("src/main/resources/scripts")
-val scriptProjectTools by configurations.creating {
+val scriptProjectTools = configurations.create("scriptProjectTools") {
     isCanBeConsumed = false
     extendsFrom(
         configurations.getByName("implementation"),
@@ -26,8 +31,8 @@ repositories {
 
 dependencies {
     implementation(project(":"))
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("io.papermc.paper:paper-api:$minecraftVersion-R0.1-SNAPSHOT")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+    implementation("io.papermc.paper:paper-api:$paperVersion")
 
     scriptProjectTools(kotlin("compiler-embeddable", kotlinVersion))
     scriptProjectTools(kotlin("reflect", kotlinVersion))
@@ -49,7 +54,8 @@ fun registerScriptCheck(
     name: String,
     taskDescription: String,
     sourceRoot: File,
-    mode: String
+    mode: String,
+    emptyPolicy: String = "require-sources"
 ) =
     tasks.register<JavaExec>(name) {
         val compilerCache = layout.buildDirectory.dir("eternalScript-check/$name")
@@ -57,10 +63,12 @@ fun registerScriptCheck(
         description = taskDescription
         classpath = scriptProjectTools
         mainClass.set("eternalScript.core.script.project.ScriptProjectCheckTool")
+        javaLauncher.set(projectJavaLauncher)
         args(
             sourceRoot.absolutePath,
             compilerCache.get().asFile.absolutePath,
-            mode
+            mode,
+            emptyPolicy
         )
         inputs.files(
             fileTree(sourceRoot) {
@@ -85,7 +93,8 @@ val checkBundledScripts = registerScriptCheck(
     "checkBundledScripts",
     "Compiles the plugin's bundled runtime Kotlin sources as one project without evaluating them.",
     bundledScriptRoot.asFile,
-    "runtime"
+    "runtime",
+    "allow-empty"
 )
 val checkBundledExamples = registerScriptCheck(
     "checkBundledExamples",

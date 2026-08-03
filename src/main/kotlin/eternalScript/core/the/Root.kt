@@ -2,9 +2,8 @@ package eternalScript.core.the
 
 import eternalScript.EternalScript
 import eternalScript.api.command.CommandBuilder
-import eternalScript.api.manager.Manager
-import eternalScript.core.extension.tag
-import eternalScript.core.extension.toComponent
+import eternalScript.api.manager.PluginStartable
+import eternalScript.api.manager.PluginStoppable
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -19,8 +18,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import org.bukkit.Bukkit
-import org.bukkit.command.CommandSender
-import org.bukkit.entity.Player
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.HandlerList
@@ -73,29 +70,11 @@ object Root {
 
     fun register(vararg commandBuilder: CommandBuilder) = commandBuilder.forEach(::registerEventHandler)
 
-    fun register(vararg manager: Manager) = manager.forEach(Manager::register)
+    fun start(vararg component: PluginStartable) = component.forEach(PluginStartable::start)
 
-    fun unregister(vararg manager: Manager) = manager.forEach(Manager::unregister)
+    fun stop(vararg component: PluginStoppable) = component.forEach(PluginStoppable::stop)
 
     fun dataFolder() = INSTANCE.dataFolder
-
-    fun componentLogger() = INSTANCE.componentLogger
-
-    fun namespace() = "<gray>[${ORIGIN.tag("gold")}]</gray>"
-
-    fun send(sender: CommandSender?, message: String) {
-        if (sender !is Player) return
-        sender.sendMessage("${namespace()} $message".toComponent())
-    }
-
-    fun info(message: String) {
-        componentLogger().info(message.toComponent())
-    }
-
-    fun sendInfo(sender: CommandSender?, message: String) {
-        send(sender, message)
-        componentLogger().info(message)
-    }
 
     fun onlinePlayers() = Bukkit.getOnlinePlayers()
 

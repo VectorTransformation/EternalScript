@@ -1,5 +1,5 @@
 pluginManagement {
-    val kotlinVersion: String by settings
+    val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
 
     plugins {
         // https://plugins.gradle.org/plugin/org.gradle.toolchains.foojay-resolver-convention

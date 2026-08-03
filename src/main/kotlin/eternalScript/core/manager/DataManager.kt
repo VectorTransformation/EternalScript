@@ -1,49 +1,73 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.Manager
-import eternalScript.core.data.Config
-import eternalScript.core.data.Resource
-import eternalScript.core.extension.wrap
-import eternalScript.core.script.data.ScriptSuffix
+import eternalScript.api.manager.PluginStartable
+import eternalScript.api.manager.PluginStoppable
+import eternalScript.core.environment.EnvironmentRefreshRequest
+import eternalScript.core.environment.ScriptEnvironmentCoordinator
+import eternalScript.core.feedback.UserFeedback
+import eternalScript.core.feedback.UserFeedbackChannels
+import eternalScript.core.feedback.UserFeedbackEvent
+import eternalScript.core.operation.ScriptOperation
+import eternalScript.core.operation.ScriptOperationKind
+import eternalScript.core.operation.ScriptOperationSnapshot
+import eternalScript.core.operation.ScriptOperationTracker
+import eternalScript.core.script.classloading.ScriptGenerationRegistry
 import eternalScript.core.script.definition.ScriptCompilationCache
-import eternalScript.core.script.project.PROJECT_SCRIPT_NAME
-import eternalScript.core.script.project.legacyScriptWarning
+import eternalScript.core.script.generation.ScriptProjectLoadOutcome
+import eternalScript.core.script.generation.ScriptProjectCheckOutcome
+import eternalScript.core.script.generation.ScriptProjectCheckResult
+import eternalScript.core.script.generation.ScriptProjectReport
+import eternalScript.core.script.generation.ScriptProjectUnloadOutcome
 import eternalScript.core.script.project.runtimeScriptProjectRepository
 import eternalScript.core.the.GlobalTaskOwner
 import eternalScript.core.the.Root
+import eternalScript.core.workspace.WorkspaceManager
+import eternalScript.core.workspace.WorkspaceUpdateResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
 import org.bukkit.Bukkit
-import org.bukkit.command.CommandSender
-import java.io.File
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.LockSupport
+import org.bukkit.event.EventPriority
+import org.bukkit.event.Listener
+import org.bukkit.event.server.PluginDisableEvent
+import org.bukkit.event.server.PluginEnableEvent
+import org.bukkit.event.server.ServerLoadEvent
+import org.bukkit.plugin.Plugin
+import java.util.UUID
 import java.util.logging.Level
-import java.util.zip.ZipEntry
-import java.util.zip.ZipFile
 
-object DataManager : Manager {
+object DataManager : PluginStartable, PluginStoppable, Listener {
     private val operationLock = Any()
     private var operation: ScriptProjectOperation? = null
+    private var lastUserOperation: ScriptOperationSnapshot? = null
+    private var automaticLoadState = AutomaticProjectLoadState.NOT_ATTEMPTED
+    private var startupWorkspace: WorkspaceUpdateResult? = null
+    private var pendingEnvironmentRefresh: EnvironmentRefreshRequest? = null
+    private val initialLoad = InitialScriptLoadCoordinator()
     private val lifecycle = DataManagerLifecycle()
     private val scriptRepository by lazy(::runtimeScriptProjectRepository)
 
-    override fun register() {
+    override fun start() {
         synchronized(operationLock) {
             lifecycle.open()
+            automaticLoadState = AutomaticProjectLoadState.NOT_ATTEMPTED
+            startupWorkspace = null
         }
         ScriptManager.open()
-        makeAll()
-        compile()
+        initializeWorkspace()
+        registerServerLifecycle()
     }
 
     fun shutdown() {
+        Root.unregister(this as Listener)
         val current = synchronized(operationLock) {
             lifecycle.close()
             ScriptManager.close()
+            pendingEnvironmentRefresh = null
+            initialLoad.reset()
+            automaticLoadState = AutomaticProjectLoadState.NOT_ATTEMPTED
+            startupWorkspace = null
             operation.also { activeOperation ->
                 operation = null
                 activeOperation?.owner?.let(Root::beginGlobalTaskOwnerShutdown)
@@ -70,177 +94,130 @@ object DataManager : Manager {
                     "with generation commits fenced."
             )
         }
+        ScriptEnvironmentCoordinator.clear()
     }
 
-    fun makeAll() {
-        listOf(
-            Resource.DATA_FOLDER,
-            Resource.LIBS,
-            Resource.CACHE
-        ).forEach(Resource::make)
-
-        saveResource(Resource.SCRIPTS, *ScriptSuffix.SCRIPT.suffix)
-
-        listOf(
-            Resource.LANG
-        ).forEach { resource ->
-            saveResource(resource, *ScriptSuffix.LANG.suffix)
-        }
-
-        Root.register(ReloadManager)
+    override fun stop() {
+        shutdown()
     }
 
-    fun saveResource(resource: Resource, vararg extension: String) {
-        if (!resource.exists()) {
-            val jarPath = javaClass.protectionDomain.codeSource.location.path
-            val fileName = resource.file.nameWithoutExtension
-            ZipFile(jarPath).use { jar ->
-                jar.entries()
-                    .asSequence()
-                    .map(ZipEntry::getName)
-                    .filter { name ->
-                        name.startsWith(fileName) && extension.any(name::endsWith)
-                    }.forEach { name ->
-                        Root.INSTANCE.saveResource(name, false)
-                    }
-            }
+    private fun initializeWorkspace() {
+        Root.start(ReloadManager)
+        synchronized(operationLock) {
+            startupWorkspace = ScriptEnvironmentCoordinator.initialize()
         }
     }
 
-    fun compile(sender: CommandSender? = null) {
-        if (sender == null) {
-            startOperation(null) { session ->
-                snapshotWithLegacyWarning()?.let { project ->
-                    if (lifecycle.accepts(session)) {
-                        ScriptManager.load(project)
-                    }
-                }
-            }
-        } else {
-            reloadAll(sender)
-        }
-    }
-
-    fun reloadAll(sender: CommandSender) {
-        startOperation(sender) { session ->
-            val project = snapshotWithLegacyWarning()
-            if (!lifecycle.accepts(session)) return@startOperation
-            if (project == null) {
-                Root.global {
-                    LangManager.sendMessage(sender, "script.error.empty_project")
-                }
-                return@startOperation
-            }
-            val total = project.files.size
-            Root.global {
-                LangManager.sendMessage(sender, "script.reload.all_started", args = listOf(total.toString()))
-            }
-
-            if (!lifecycle.accepts(session)) return@startOperation
-            val success = ScriptManager.load(project, sender)
-            val passed = if (success) total else 0
-            Root.global {
-                LangManager.sendMessage(
-                    sender,
-                    "script.reload.all_completed",
-                    args = listOf(total.toString(), passed.toString(), (total - passed).toString())
-                )
-            }
-        }
-    }
-
-    fun reloadScript(script: String, sender: CommandSender) {
-        startOperation(sender) { session ->
-            val project = snapshotWithLegacyWarning()
-            if (!lifecycle.accepts(session)) return@startOperation
-            val available = project?.files?.mapTo(hashSetOf()) { it.name }.orEmpty()
-            if (script !in available && script !in ScriptManager.scripts()) {
-                Root.global {
-                    LangManager.sendMessage(sender, "script.error.not_found", args = listOf(script.wrap()))
-                }
-                return@startOperation
-            }
-
-            Root.global {
-                LangManager.sendMessage(sender, "script.reload.one_started", args = listOf(script.wrap()))
-            }
-            if (!lifecycle.accepts(session)) return@startOperation
-            val success = project?.let { ScriptManager.load(it, sender) } ?: false
-            Root.global {
-                val key = if (success) "script.reload.completed" else "script.reload.failed"
-                LangManager.sendMessage(sender, key, args = listOf(script.wrap()))
-            }
-        }
-    }
-
-    fun checkAll(sender: CommandSender? = null) {
-        startOperation(sender) { session ->
-            val project = snapshotWithLegacyWarning()
-            if (!lifecycle.accepts(session)) return@startOperation
+    internal fun reload(feedback: UserFeedback): Boolean {
+        if (!requireEnvironment(feedback)) return false
+        return startOperation(feedback, ScriptOperationKind.RELOAD) { session ->
+            val project = scriptRepository.snapshot()
+            if (!lifecycle.accepts(session)) return@startOperation false
             val total = project?.files?.size ?: 0
-            Root.global {
-                LangManager.sendMessage(sender, "script.check.all_started", args = listOf(total.toString()))
+            emit(feedback, UserFeedbackEvent.ProjectReloadStarted(total))
+            if (project == null) {
+                emit(
+                    feedback,
+                    UserFeedbackEvent.ProjectSourceMissing(
+                        activeProject = ScriptManager.generationSnapshot().exists
+                    )
+                )
+                return@startOperation false
             }
-            if (!lifecycle.accepts(session)) return@startOperation
-            val success = project == null || ScriptManager.check(project, sender)
-            val passed = if (success) total else 0
-            Root.global {
-                LangManager.sendMessage(
-                    sender,
-                    "script.check.all_completed",
-                    args = listOf(total.toString(), passed.toString(), (total - passed).toString())
+
+            if (!lifecycle.accepts(session)) return@startOperation false
+            val result = ScriptManager.load(project)
+            emit(feedback, UserFeedbackEvent.ProjectReloadFinished(result))
+            result.activated
+        }
+    }
+
+    internal fun check(feedback: UserFeedback): Boolean {
+        if (!requireEnvironment(feedback)) return false
+        return startOperation(feedback, ScriptOperationKind.CHECK) { session ->
+            val project = scriptRepository.snapshot()
+            if (!lifecycle.accepts(session)) return@startOperation false
+            val total = project?.files?.size ?: 0
+            emit(feedback, UserFeedbackEvent.ProjectCheckStarted(total))
+            if (project == null) {
+                emit(
+                    feedback,
+                    UserFeedbackEvent.ProjectCheckFinished(
+                        sourceCount = 0,
+                        result = ScriptProjectCheckResult(
+                            outcome = ScriptProjectCheckOutcome.NO_SOURCES,
+                            report = ScriptProjectReport()
+                        )
+                    )
+                )
+                return@startOperation false
+            }
+
+            if (!lifecycle.accepts(session)) return@startOperation false
+            val result = ScriptManager.check(project)
+            emit(feedback, UserFeedbackEvent.ProjectCheckFinished(total, result))
+            result.passed
+        }
+    }
+
+    internal fun unload(feedback: UserFeedback): Boolean {
+        return startOperation(feedback, ScriptOperationKind.UNLOAD) { session ->
+            if (!lifecycle.accepts(session)) return@startOperation false
+            val before = ScriptManager.generationSnapshot()
+            if (before.exists) {
+                emit(
+                    feedback,
+                    UserFeedbackEvent.ProjectUnloadStarted(
+                        sourceCount = before.sourceNames.size,
+                        entryCount = before.entryNames.size
+                    )
                 )
             }
+            val result = ScriptManager.clearNow()
+            emit(
+                feedback,
+                UserFeedbackEvent.ProjectUnloadFinished(
+                    result = result,
+                    diskSourceCount = scriptRepository.paths().count()
+                )
+            )
+            result.outcome != ScriptProjectUnloadOutcome.REJECTED
         }
     }
 
-    fun checkScript(script: String, sender: CommandSender) {
-        startOperation(sender) { session ->
-            val project = snapshotWithLegacyWarning()
-            if (!lifecycle.accepts(session)) return@startOperation
-            if (project == null || project.files.none { it.name == script }) {
-                Root.global {
-                    LangManager.sendMessage(sender, "script.error.not_found", args = listOf(script.wrap()))
-                }
-                return@startOperation
-            }
-
-            Root.global {
-                LangManager.sendMessage(sender, "script.check.one_started", args = listOf(script.wrap()))
-            }
-            if (!lifecycle.accepts(session)) return@startOperation
-            ScriptManager.check(project, sender, announceName = script)
-        }
-    }
-
-    fun unloadAll(sender: CommandSender) {
-        startOperation(sender) { session ->
-            if (!lifecycle.accepts(session)) return@startOperation
-            val count = ScriptManager.clearNow()
-            if (count == null) {
-                Root.global {
-                    LangManager.sendMessage(sender, "script.operation.busy")
-                }
-                return@startOperation
-            }
-            Root.global {
-                LangManager.sendMessage(sender, "script.unload.all_completed", args = listOf(count.toString()))
-            }
-        }
-    }
-
-    fun reloadConfig(sender: CommandSender) {
-        startOperation(sender) { session ->
-            Root.global {
+    internal fun reloadConfig(feedback: UserFeedback): Boolean {
+        return startOperation(feedback, ScriptOperationKind.CONFIG_RELOAD) { session ->
+            emit(feedback, UserFeedbackEvent.ConfigurationReloadStarted)
+            val capture = Root.global {
                 if (lifecycle.accepts(session)) {
-                    ReloadManager.reload(sender, false)
+                    ReloadManager.reload()
                 }
+                ScriptEnvironmentCoordinator.capturePluginClasspath()
             }
+            if (!lifecycle.accepts(session)) return@startOperation false
+            val (_, workspace) = ScriptEnvironmentCoordinator.refreshClasspathAndWorkspace(capture)
+            emit(feedback, UserFeedbackEvent.ConfigurationReloadFinished(workspace))
+            workspace.successful
         }
     }
 
-    fun clearCache(sender: CommandSender) {
-        startOperation(sender) { session ->
+    internal fun refreshWorkspace(feedback: UserFeedback): Boolean {
+        return startOperation(feedback, ScriptOperationKind.WORKSPACE_UPDATE) { session ->
+            emit(feedback, UserFeedbackEvent.WorkspaceUpdateStarted)
+            if (!lifecycle.accepts(session)) return@startOperation false
+
+            val capture = Root.global { ScriptEnvironmentCoordinator.capturePluginClasspath() }
+            val (_, update) = ScriptEnvironmentCoordinator.refreshClasspathAndWorkspace(capture)
+            if (!lifecycle.accepts(session)) return@startOperation false
+
+            emit(feedback, UserFeedbackEvent.WorkspaceUpdateFinished(update))
+            update.successful
+        }
+    }
+
+    internal fun clearCache(feedback: UserFeedback): Boolean {
+        return startOperation(feedback, ScriptOperationKind.CACHE_CLEAR) { session ->
+            emit(feedback, UserFeedbackEvent.CacheClearStarted)
             val cleared = synchronized(operationLock) {
                 if (!lifecycle.accepts(session)) {
                     false
@@ -249,62 +226,82 @@ object DataManager : Manager {
                     true
                 }
             }
-            if (!cleared) return@startOperation
-            Root.global {
-                LangManager.sendMessage(sender, "cache.cleared")
-            }
+            if (!cleared) return@startOperation false
+            emit(feedback, UserFeedbackEvent.CacheClearFinished)
+            true
         }
     }
 
     private fun startOperation(
-        sender: CommandSender?,
-        block: suspend (session: Long) -> Unit
+        feedback: UserFeedback,
+        kind: ScriptOperationKind,
+        announceBusy: Boolean = true,
+        block: suspend (session: Long) -> Boolean
     ): Boolean {
         val current = synchronized(operationLock) {
             val session = lifecycle.openSession() ?: return false
             if (operation != null) return@synchronized null
 
+            val tracker = ScriptOperationTracker(
+                ScriptOperation(kind)
+            )
             val owner = Root.newGlobalTaskOwner()
             val created = Root.launch(context = owner, start = CoroutineStart.LAZY) {
+                tracker.start()
                 try {
-                    if (lifecycle.accepts(session)) {
+                    val result = if (lifecycle.accepts(session)) {
                         block(session)
+                    } else {
+                        null
                     }
+                    if (result == null) {
+                        tracker.cancel()
+                    } else if (lifecycle.accepts(session)) {
+                        tracker.complete(result)
+                    } else {
+                        tracker.cancel()
+                    }
+                } catch (_: CancellationException) {
+                    tracker.cancel()
                 } catch (exception: Throwable) {
-                    if (lifecycle.accepts(session)) {
-                        Root.global {
-                            LangManager.sendMessage(
-                                sender,
-                                "script.compile.error",
-                                args = listOf(
-                                    PROJECT_SCRIPT_NAME.wrap(),
-                                    "-",
-                                    "-",
-                                    exception.message ?: exception.javaClass.simpleName
-                                )
-                            )
-                            if (ConfigManager.value(Config.DEBUG)) {
-                                Root.INSTANCE.logger.log(Level.WARNING, "EternalScript project operation failed.", exception)
-                            }
-                        }
+                    tracker.fail()
+                    val incidentId = UUID.randomUUID().toString().substring(0, 8)
+                    Root.INSTANCE.logger.log(
+                        Level.SEVERE,
+                        "EternalScript project operation failed " +
+                            "(incident=$incidentId, operation=${kind.name}).",
+                        exception
+                    )
+                    if (kind.userVisible && lifecycle.accepts(session)) {
+                        emit(
+                            feedback,
+                            UserFeedbackEvent.OperationFailed(kind, incidentId)
+                        )
                     }
                 }
             }
-            val createdOperation = ScriptProjectOperation(created, owner, session)
+            val createdOperation = ScriptProjectOperation(tracker, created, owner, session)
             operation = createdOperation
             created.invokeOnCompletion {
+                val snapshot = createdOperation.tracker.snapshot()
                 synchronized(operationLock) {
                     if (operation === createdOperation) {
                         operation = null
                     }
+                    if (snapshot.operation.kind.userVisible) {
+                        lastUserOperation = snapshot
+                    }
                 }
                 Root.closeGlobalTaskOwner(owner)
+                drainEnvironmentRefresh()
             }
             createdOperation
         }
 
         if (current == null) {
-            LangManager.sendMessage(sender, "script.operation.busy")
+            if (announceBusy) {
+                feedback.emit(UserFeedbackEvent.OperationBusy)
+            }
             return false
         }
 
@@ -312,91 +309,269 @@ object DataManager : Manager {
         return true
     }
 
-    private fun snapshotWithLegacyWarning() =
-        scriptRepository.snapshot().also {
-            warnLegacyScripts()
+    private fun registerServerLifecycle() {
+        Root.register(ServerLoadEvent::class, this, EventPriority.MONITOR) { event ->
+            val shouldLoad = synchronized(operationLock) {
+                initialLoad.onServerLoad(
+                    reload = event.type == ServerLoadEvent.LoadType.RELOAD
+                )
+            }
+            requestEnvironmentRefresh(
+                EnvironmentRefreshRequest(
+                    capture = ScriptEnvironmentCoordinator.capturePluginClasspath(),
+                    loadScripts = shouldLoad
+                )
+            )
         }
-
-    private fun warnLegacyScripts() {
-        val legacy = scriptRepository.legacyPaths()
-        legacyScriptWarning(legacy)?.let(Root.INSTANCE.logger::warning)
+        Root.register(PluginEnableEvent::class, this, EventPriority.MONITOR) { event ->
+            if (event.plugin !== Root.INSTANCE) {
+                requestEnvironmentRefresh(
+                    EnvironmentRefreshRequest(ScriptEnvironmentCoordinator.capturePluginClasspath())
+                )
+            }
+        }
+        Root.register(PluginDisableEvent::class, this, EventPriority.LOWEST) { event ->
+            if (event.plugin !== Root.INSTANCE) {
+                val pluginName = event.plugin.name
+                ScriptManager.invalidateEnvironment()
+                ScriptGenerationRegistry.invalidate(pluginName)
+                val frozen = ScriptManager.freezeForDisabledPlugin(pluginName)
+                requestEnvironmentRefresh(
+                    EnvironmentRefreshRequest(
+                        capture = ScriptEnvironmentCoordinator.capturePluginClasspath(excludedPlugin = event.plugin),
+                        disabledPlugins = if (frozen) setOf(pluginName) else emptySet()
+                    )
+                )
+            }
+        }
+        Root.INSTANCE.server.globalRegionScheduler.runDelayed(
+            Root.INSTANCE,
+            { _ ->
+                val shouldLoad = synchronized(operationLock) {
+                    initialLoad.onFallback(
+                        sessionOpen = lifecycle.openSession() != null
+                    )
+                }
+                if (shouldLoad) {
+                    requestEnvironmentRefresh(
+                        EnvironmentRefreshRequest(
+                            capture = ScriptEnvironmentCoordinator.capturePluginClasspath(),
+                            loadScripts = true
+                        )
+                    )
+                }
+            },
+            1L
+        )
     }
 
-    fun scriptPaths() = scriptRepository.paths()
+    private fun requestEnvironmentRefresh(request: EnvironmentRefreshRequest) {
+        val ready = synchronized(operationLock) {
+            if (lifecycle.openSession() == null) return
+            pendingEnvironmentRefresh =
+                pendingEnvironmentRefresh?.merge(request) ?: request
+            initialLoad.serverLoaded
+        }
+        if (ready) {
+            drainEnvironmentRefresh()
+        }
+    }
 
-    fun isActive() = synchronized(operationLock) {
-        operation != null
+    private fun drainEnvironmentRefresh() {
+        while (true) {
+            val request = synchronized(operationLock) {
+                if (lifecycle.openSession() == null || operation != null) {
+                    return
+                }
+                pendingEnvironmentRefresh.also {
+                    pendingEnvironmentRefresh = null
+                }
+            } ?: return
+
+            val started = startOperation(
+                feedback = UserFeedbackChannels.serverLog,
+                kind = ScriptOperationKind.ENVIRONMENT_REFRESH,
+                announceBusy = false
+            ) { session ->
+                processEnvironmentRefresh(request, session)
+            }
+            if (started) return
+
+            synchronized(operationLock) {
+                if (lifecycle.openSession() == null) return
+                pendingEnvironmentRefresh =
+                    request.merge(pendingEnvironmentRefresh)
+            }
+        }
+    }
+
+    private suspend fun processEnvironmentRefresh(
+        initialRequest: EnvironmentRefreshRequest,
+        session: Long
+    ): Boolean {
+        val request = if (initialRequest.metadataApplied) {
+            initialRequest
+        } else {
+            val (_, workspace) = ScriptEnvironmentCoordinator.refreshClasspathAndWorkspace(initialRequest.capture)
+            if (initialRequest.loadScripts) {
+                mergeStartupWorkspace(workspace)
+            } else {
+                emit(
+                    UserFeedbackChannels.serverLog,
+                    UserFeedbackEvent.WorkspaceMaintenance(workspace)
+                )
+            }
+            initialRequest.copy(metadataApplied = true)
+        }
+        if (!lifecycle.accepts(session)) return false
+
+        if (request.disabledPlugins.isNotEmpty()) {
+            val unloaded = ScriptManager.unloadForDisabledPlugins(
+                request.disabledPlugins
+            )
+            if (unloaded == null) {
+                Root.INSTANCE.logger.warning(
+                    "The script generation could not be unloaded after a plugin " +
+                        "dependency was disabled. New script entries remain blocked; " +
+                        "cleanup will retry."
+                )
+                delay(PLUGIN_DISABLE_RETRY_DELAY_MILLIS)
+                if (lifecycle.accepts(session)) {
+                    requestEnvironmentRefresh(request)
+                }
+                return false
+            }
+        }
+        if (!lifecycle.accepts(session)) return false
+        if (!request.loadScripts || !lifecycle.accepts(session)) return true
+
+        val project = scriptRepository.snapshot()
+        if (project == null) {
+            recordAutomaticLoad(session, AutomaticProjectLoadState.EMPTY)
+            emit(
+                UserFeedbackChannels.serverLog,
+                UserFeedbackEvent.StartupSummary(
+                    workspace = takeStartupWorkspace(),
+                    sourceCount = 0,
+                    loadResult = null
+                )
+            )
+            return true
+        }
+        if (!lifecycle.accepts(session)) return false
+
+        val before = ScriptManager.generationSnapshot()
+        recordAutomaticLoad(
+            session,
+            if (before.exists) {
+                AutomaticProjectLoadState.FAILED_PRESERVED
+            } else {
+                AutomaticProjectLoadState.FAILED_INACTIVE
+            }
+        )
+        val result = ScriptManager.load(project)
+        val state = when (result.outcome) {
+            ScriptProjectLoadOutcome.ACTIVATED -> AutomaticProjectLoadState.ACTIVATED
+            ScriptProjectLoadOutcome.REJECTED_PREVIOUS_ACTIVE,
+            ScriptProjectLoadOutcome.REJECTED_ACTIVE_CHANGED ->
+                AutomaticProjectLoadState.FAILED_PRESERVED
+            ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE ->
+                AutomaticProjectLoadState.FAILED_INACTIVE
+        }
+        recordAutomaticLoad(session, state)
+        emit(
+            UserFeedbackChannels.serverLog,
+            UserFeedbackEvent.StartupSummary(
+                workspace = takeStartupWorkspace(),
+                sourceCount = project.files.size,
+                loadResult = result
+            )
+        )
+        return result.activated
+    }
+
+    private fun recordAutomaticLoad(
+        session: Long,
+        state: AutomaticProjectLoadState
+    ) {
+        synchronized(operationLock) {
+            if (lifecycle.accepts(session)) {
+                automaticLoadState = state
+            }
+        }
+    }
+
+    private fun takeStartupWorkspace(): WorkspaceUpdateResult =
+        synchronized(operationLock) {
+            startupWorkspace.also { startupWorkspace = null }
+        } ?: WorkspaceUpdateResult(status = WorkspaceManager.status())
+
+    private fun mergeStartupWorkspace(update: WorkspaceUpdateResult) {
+        synchronized(operationLock) {
+            val initial = startupWorkspace
+            startupWorkspace = if (initial == null) {
+                update
+            } else {
+                WorkspaceUpdateResult(
+                    status = update.status,
+                    createdFiles = (initial.createdFiles + update.createdFiles).distinct(),
+                    updatedFiles = (initial.updatedFiles + update.updatedFiles).distinct(),
+                    conflictFiles = (initial.conflictFiles + update.conflictFiles).distinct(),
+                    errors = (initial.errors + update.errors).distinct(),
+                    ideRefreshRecommended = initial.ideRefreshRecommended ||
+                        update.ideRefreshRecommended
+                )
+            }
+        }
+    }
+
+    internal fun projectStatus(): ScriptProjectStatus {
+        val operationState = synchronized(operationLock) {
+            Triple(
+                operation?.tracker?.snapshot(),
+                lastUserOperation,
+                automaticLoadState
+            )
+        }
+        val (currentOperation, previousUserOperation, lastAutomaticLoad) = operationState
+        return ScriptProjectStatus(
+            generation = ScriptManager.generationSnapshot(),
+            availableSources = scriptRepository.paths().toSet(),
+            currentUserOperation = currentOperation?.takeIf { snapshot ->
+                snapshot.operation.kind.userVisible
+            },
+            lastUserOperation = previousUserOperation,
+            backgroundMaintenance = currentOperation?.operation?.kind?.userVisible == false,
+            automaticLoadState = lastAutomaticLoad
+        )
+    }
+
+    private fun environmentReady(): Boolean =
+        synchronized(operationLock) { initialLoad.serverLoaded } &&
+            ScriptEnvironmentCoordinator.isReady()
+
+    private fun requireEnvironment(feedback: UserFeedback): Boolean {
+        if (environmentReady()) return true
+        feedback.emit(UserFeedbackEvent.EnvironmentPreparing)
+        return false
+    }
+
+    private suspend fun emit(
+        feedback: UserFeedback,
+        event: UserFeedbackEvent
+    ) {
+        Root.global {
+            feedback.emit(event)
+        }
     }
 }
 
 private data class ScriptProjectOperation(
+    val tracker: ScriptOperationTracker,
     val job: Job,
     val owner: GlobalTaskOwner,
     val session: Long
 )
 
-internal class DataManagerLifecycle {
-    private data class State(
-        val session: Long,
-        val open: Boolean
-    )
-
-    private val state = AtomicReference(State(session = 0, open = false))
-
-    fun open(): Long =
-        state.updateAndGet { current ->
-            if (current.open) current else State(current.session + 1, true)
-        }.session
-
-    fun close(): Long =
-        state.updateAndGet { current ->
-            if (!current.open) current else State(current.session + 1, false)
-        }.session
-
-    fun openSession(): Long? =
-        state.get().let { current ->
-            current.session.takeIf { current.open }
-        }
-
-    fun accepts(session: Long): Boolean =
-        state.get().let { current ->
-            current.open && current.session == session
-        }
-}
-
-internal fun awaitOperationShutdown(
-    operation: Job?,
-    timeoutMillis: Long,
-    isGlobalThread: Boolean,
-    pumpGlobalTasks: () -> Unit
-): Boolean {
-    require(timeoutMillis >= 0L) {
-        "Operation shutdown timeout must not be negative."
-    }
-    if (operation == null || operation.isCompleted) return true
-    if (!isGlobalThread) {
-        return runBlocking {
-            withTimeoutOrNull(timeoutMillis) {
-                operation.join()
-                true
-            } ?: false
-        }
-    }
-
-    val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
-    val started = System.nanoTime()
-    while (!operation.isCompleted) {
-        pumpGlobalTasks()
-        if (operation.isCompleted) return true
-
-        val elapsed = System.nanoTime() - started
-        if (elapsed >= timeoutNanos) return false
-        LockSupport.parkNanos(
-            minOf(SHUTDOWN_OPERATION_POLL_NANOS, timeoutNanos - elapsed)
-        )
-    }
-    return true
-}
-
 private const val OPERATION_SHUTDOWN_TIMEOUT_MILLIS = 10_000L
-private const val SHUTDOWN_OPERATION_POLL_NANOS = 100_000L
+private const val PLUGIN_DISABLE_RETRY_DELAY_MILLIS = 250L

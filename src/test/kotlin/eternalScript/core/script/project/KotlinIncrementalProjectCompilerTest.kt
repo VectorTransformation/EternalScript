@@ -442,9 +442,6 @@ class KotlinIncrementalProjectCompilerTest {
             val names = entries.map { entry -> entry.name }
 
             assertEquals(names.sorted(), names)
-            assertTrue(
-                GENERATED_BOOTSTRAP_CLASS.replace('.', '/') + ".class" in names
-            )
             entries.forEach { entry ->
                 assertEquals(0L, entry.time)
             }

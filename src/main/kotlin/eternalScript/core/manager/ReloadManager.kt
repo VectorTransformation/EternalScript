@@ -1,19 +1,15 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.Manager
-import eternalScript.api.manager.Reloader
-import org.bukkit.command.CommandSender
+import eternalScript.api.manager.PluginStartable
+import eternalScript.core.feedback.LocaleCatalog
 
-object ReloadManager : Manager, Reloader {
-    override fun register() {
+object ReloadManager : PluginStartable {
+    override fun start() {
         reload()
     }
 
-    override fun reload(sender: CommandSender?, silent: Boolean) {
-        ConfigManager.reload(sender, silent)
-        LangManager.reload(sender, silent)
-        if (!silent) {
-            LangManager.sendMessage(sender, "config.reloaded")
-        }
+    fun reload() {
+        ConfigManager.reload()
+        LocaleCatalog.reload()
     }
 }
