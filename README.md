@@ -90,6 +90,12 @@ There is intentionally no per-file check, reload, or unload. A command always
 acts on one stable snapshot of the complete project. The current API also does
 not use entry annotations or script-specific import directives.
 
+For projects created against an older source boundary, follow the
+[2.0 API migration guide](MIGRATION.md). There is no deprecated compatibility
+layer: extend `EternalScript` directly, move every API registration out of the
+constructor and into `onEnable`, and import command builder types only from
+`eternalScript.api.script.command`.
+
 Source discovery rules are deliberately simple:
 
 - The extension must be lowercase `.kt`.
@@ -242,7 +248,10 @@ On Linux or macOS:
 ./gradlew build
 ```
 
-The plugin JAR is written to `build/libs/`.
+The plugin JAR is written to `build/libs/`. The standalone API artifact is also
+built in `eternalscript-api/build/libs/` for tooling and compile-only consumers.
+Server installation still uses only the plugin JAR from `build/libs/`; that JAR
+embeds the API classes exactly once.
 
 ## License
 

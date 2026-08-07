@@ -35,6 +35,22 @@ lowercase `scripts/*.kt` source is added.
 Only lowercase `.kt` files are included. A file is ignored when its name or
 any parent path segment starts with `-`.
 
+## Public API boundary
+
+Entry classes extend `eternalScript.api.script.EternalScript` directly. Do not
+inherit the removed `Script` type or import implementation classes from
+`eternalScript.core`.
+
+The runtime bridge is connected after the no-argument constructor completes
+and immediately before `onEnable`. Therefore constructor access to `plugin`,
+`event`, `command`, `track`, `task`, `launch`, or `async` is rejected. Put event
+and command registration in `onEnable`; EternalScript recreates those
+definitions on every activation and rejects API use after final disposal.
+
+The command DSL normally needs no builder import. Code that explicitly names
+the type must import
+`eternalScript.api.script.command.ScriptCommandBuilder`.
+
 ## Dependencies and workspace maintenance
 
 EternalScript automatically refreshes the workspace classpath when server
