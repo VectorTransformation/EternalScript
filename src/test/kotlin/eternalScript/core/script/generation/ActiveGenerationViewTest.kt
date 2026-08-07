@@ -1,9 +1,10 @@
 package eternalScript.core.script.generation
 
-import eternalScript.api.script.Script
+import eternalScript.api.script.EternalScript
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.project.ScriptProjectFile
 import eternalScript.core.script.project.ScriptProjectSource
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -20,7 +21,7 @@ class ActiveGenerationViewTest {
     @Test
     fun `project identity remains visible while generation is swapping`() {
         val runtime = ScriptGeneration(
-            listOf(object : Script() {}),
+            listOf(ManagedScriptRuntime(object : EternalScript() {})),
             ViewGenerationRuntimeResource(setOf("Alpha", "Beta"))
         )
         val project = ScriptProjectSource.compose(

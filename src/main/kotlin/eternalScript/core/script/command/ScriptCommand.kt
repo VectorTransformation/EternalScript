@@ -1,5 +1,6 @@
 package eternalScript.core.script.command
 
+import eternalScript.api.script.command.ScriptCommandBuilder
 import eternalScript.core.script.data.ScriptExecutionGate
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender

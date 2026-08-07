@@ -1,7 +1,7 @@
 package eternalScript.core.script.runtime
 
 import eternalScript.core.script.command.ScriptCommand
-import eternalScript.core.script.command.ScriptCommandBuilder
+import eternalScript.api.script.command.ScriptCommandBuilder
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
 import org.bukkit.command.Command
@@ -22,14 +22,12 @@ class ScriptCommandRegistryTest {
                 true
             }
         )
-        registry.addCommand(ScriptCommandBuilder("constructor"))
-
         registry.beginActivation()
         gate.withOpen {
             registry.addCommand(ScriptCommandBuilder("cycle"))
         }
         registry.register()
-        assertEquals(listOf("constructor", "cycle"), registered)
+        assertEquals(listOf("cycle"), registered)
         registry.unregister()
 
         registered.clear()
@@ -39,7 +37,7 @@ class ScriptCommandRegistryTest {
         }
         registry.register()
 
-        assertEquals(listOf("constructor", "cycle"), registered)
+        assertEquals(listOf("cycle"), registered)
     }
 
     @Test
@@ -101,9 +99,11 @@ class ScriptCommandRegistryTest {
             }
         )
 
-        registry.addCommand(ScriptCommandBuilder("reloadable"))
-        occupied = null
         registry.beginActivation()
+        gate.withOpen {
+            registry.addCommand(ScriptCommandBuilder("reloadable"))
+        }
+        occupied = null
         registry.register()
 
         assertEquals(listOf("reloadable"), registered)
@@ -121,8 +121,10 @@ class ScriptCommandRegistryTest {
             lookup = { key -> occupied.takeIf { key.equals("shared", ignoreCase = true) } }
         )
 
-        registry.addCommand(ScriptCommandBuilder("shared"))
         registry.beginActivation()
+        gate.withOpen {
+            registry.addCommand(ScriptCommandBuilder("shared"))
+        }
 
         assertFailsWith<IllegalStateException> {
             registry.register()
@@ -137,6 +139,15 @@ class ScriptCommandRegistryTest {
 
         assertFailsWith<IllegalStateException> {
             registry.addCommand(ScriptCommandBuilder("background"))
+        }
+    }
+
+    @Test
+    fun `command registration before onEnable is rejected`() {
+        val registry = registry(ScriptRegistrationGate())
+
+        assertFailsWith<IllegalStateException> {
+            registry.addCommand(ScriptCommandBuilder("constructor"))
         }
     }
 

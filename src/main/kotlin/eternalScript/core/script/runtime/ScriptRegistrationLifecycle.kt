@@ -1,22 +1,18 @@
 package eternalScript.core.script.runtime
 
 /**
- * Separates definitions created while a Script instance is being constructed
- * from registrations owned by one enable/disable cycle.
- *
- * Constructor definitions survive a rollback. Activation definitions do not:
- * they are discarded on deactivation and rebuilt by the next onEnable call.
+ * Owns definitions created by one enable/disable cycle.
+ * Definitions are discarded on deactivation and rebuilt by the next onEnable.
  */
 internal class ScriptRegistrationLifecycle<T> {
     private val monitor = Any()
-    private val constructorDefinitions = mutableListOf<T>()
     private val activationDefinitions = mutableListOf<T>()
     private val runtimeRegistrations = mutableListOf<T>()
-    private var phase = Phase.CONSTRUCTING
+    private var phase = Phase.INACTIVE
 
     fun beginActivation() {
         synchronized(monitor) {
-            check(phase == Phase.CONSTRUCTING || phase == Phase.INACTIVE) {
+            check(phase == Phase.INACTIVE) {
                 "Script registration lifecycle cannot begin activation from $phase."
             }
             activationDefinitions.clear()
@@ -28,11 +24,6 @@ internal class ScriptRegistrationLifecycle<T> {
     fun add(value: T, registrationGateOpen: Boolean): Placement =
         synchronized(monitor) {
             when (phase) {
-                Phase.CONSTRUCTING -> {
-                    constructorDefinitions += value
-                    Placement.STAGED
-                }
-
                 Phase.ACTIVATING -> {
                     check(registrationGateOpen) {
                         "Registrations created during activation must run on the enable lifecycle thread."
@@ -50,7 +41,7 @@ internal class ScriptRegistrationLifecycle<T> {
                 }
 
                 Phase.INACTIVE -> error(
-                    "Registrations can only be added during construction or the enable lifecycle."
+                    "Commands and events can only be registered from onEnable()."
                 )
 
                 Phase.DISPOSED -> error("The Script registration lifecycle is disposed.")
@@ -67,8 +58,7 @@ internal class ScriptRegistrationLifecycle<T> {
     }
 
     /**
-     * Ends one cycle. Constructor definitions remain staged for a rollback;
-     * every definition created by onEnable is released with this cycle.
+     * Ends one cycle and releases every definition created by onEnable.
      */
     fun deactivate(): Release<T> = synchronized(monitor) {
         if (phase == Phase.INACTIVE || phase == Phase.DISPOSED) {
@@ -88,7 +78,6 @@ internal class ScriptRegistrationLifecycle<T> {
         }
         val wasActive = phase == Phase.ACTIVE
         val registered = if (wasActive) currentDefinitionsLocked() else emptyList()
-        constructorDefinitions.clear()
         activationDefinitions.clear()
         runtimeRegistrations.clear()
         phase = Phase.DISPOSED
@@ -100,7 +89,7 @@ internal class ScriptRegistrationLifecycle<T> {
     }
 
     private fun currentDefinitionsLocked(): List<T> =
-        (constructorDefinitions + activationDefinitions + runtimeRegistrations).toList()
+        (activationDefinitions + runtimeRegistrations).toList()
 
     enum class Placement {
         STAGED,
@@ -113,7 +102,6 @@ internal class ScriptRegistrationLifecycle<T> {
     )
 
     private enum class Phase {
-        CONSTRUCTING,
         ACTIVATING,
         ACTIVE,
         INACTIVE,

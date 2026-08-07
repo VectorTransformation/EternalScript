@@ -1,10 +1,10 @@
 package eternalScript.core.script.project
 
 import eternalScript.api.script.EternalScript
-import eternalScript.api.script.Script
 import eternalScript.core.script.classloading.ScriptGenerationClassLoader
 import eternalScript.core.script.classloading.withThreadContextClassLoader
 import eternalScript.core.script.generation.GenerationRuntimeHandle
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Modifier
 import kotlin.script.experimental.api.*
@@ -40,7 +40,7 @@ internal class ScriptGenerationEvaluator {
             compiledScript.ownedClassNames,
             compiledScript.pluginDependencyNames
         )
-        val scripts = mutableListOf<Script>()
+        val runtimes = mutableListOf<ManagedScriptRuntime>()
         var runtimeResource: GenerationRuntimeHandle? = null
         var runtimeTransferred = false
         return try {
@@ -51,19 +51,19 @@ internal class ScriptGenerationEvaluator {
                 )
 
                 scriptTypes.forEach { type ->
-                    scripts += instantiateEternalScript(type)
+                    runtimes += ManagedScriptRuntime(instantiateEternalScript(type))
                 }
 
-                check(scripts.isNotEmpty()) {
+                check(runtimes.isNotEmpty()) {
                     "An EternalScript project did not create any script instances."
                 }
                 val resource = GenerationRuntimeHandle(
                     loader,
                     compiledScript.generationJar,
-                    scripts.toList()
+                    runtimes.toList()
                 )
                 runtimeResource = resource
-                val runtime = ScriptProjectRuntime(scripts.toList(), resource)
+                val runtime = ScriptProjectRuntime(runtimes.toList(), resource)
                 val result = ResultWithDiagnostics.Success(
                     EvaluationResult(
                         ResultValue.Unit(ScriptProjectRuntime::class, runtime),
@@ -75,7 +75,7 @@ internal class ScriptGenerationEvaluator {
             }
         } catch (exception: Throwable) {
             val failure = exception.unwrapReflectionFailure()
-            scripts.forEach { staged ->
+            runtimes.forEach { staged ->
                 runCatching(staged::disposeRuntime)
                     .exceptionOrNull()
                     ?.let(failure::addSuppressed)

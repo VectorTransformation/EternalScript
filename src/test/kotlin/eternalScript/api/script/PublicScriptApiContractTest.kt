@@ -8,7 +8,13 @@ class PublicScriptApiContractTest {
     @Test
     fun `only the current public script package is loadable`() {
         assertNotNull(Class.forName("eternalScript.api.script.EternalScript"))
-        assertNotNull(Class.forName("eternalScript.api.script.Script"))
+        assertNotNull(Class.forName("eternalScript.api.script.EternalScriptRuntimeBridge"))
+        assertNotNull(Class.forName("eternalScript.api.script.EternalScriptRuntimeAccess"))
+        assertNotNull(Class.forName("eternalScript.api.script.command.ScriptCommandBuilder"))
+
+        assertFailsWith<ClassNotFoundException> {
+            Class.forName("eternalScript.api.script.Script")
+        }
 
         assertFailsWith<ClassNotFoundException> {
             Class.forName("eternalScript.core.script.EternalScript")

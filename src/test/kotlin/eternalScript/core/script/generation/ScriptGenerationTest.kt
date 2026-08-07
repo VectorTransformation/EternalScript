@@ -1,7 +1,8 @@
 package eternalScript.core.script.generation
 
-import eternalScript.api.script.Script
+import eternalScript.api.script.EternalScript
 import eternalScript.core.script.data.ScriptExecutionGate
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -13,45 +14,46 @@ class ScriptGenerationTest {
     fun `generation state transitions apply to every script`() {
         val generation = ScriptGeneration(
             listOf(
-                object : Script() {},
-                object : Script() {}
+                managed(object : EternalScript() {}),
+                managed(object : EternalScript() {})
             ),
             TestGenerationRuntimeResource()
         )
 
         assertTrue(generation.publish())
-        assertTrue(generation.scripts.all { script -> script.executionGate.isActive })
+        assertTrue(generation.instances.all { runtime -> runtime.executionGate.isActive })
         assertEquals(ScriptExecutionGate.State.ACTIVE, generation.state)
 
         assertTrue(generation.tryFreeze())
-        assertTrue(generation.scripts.all { script ->
-            script.executionGate.state == ScriptExecutionGate.State.SWAPPING
+        assertTrue(generation.instances.all { runtime ->
+            runtime.executionGate.state == ScriptExecutionGate.State.SWAPPING
         })
         assertTrue(generation.isDrained)
 
         assertTrue(generation.restore())
-        assertTrue(generation.scripts.all { script -> script.executionGate.isActive })
+        assertTrue(generation.instances.all { runtime -> runtime.executionGate.isActive })
 
         assertTrue(generation.retire())
-        assertTrue(generation.scripts.all { script ->
-            script.executionGate.state == ScriptExecutionGate.State.RETIRED
+        assertTrue(generation.instances.all { runtime ->
+            runtime.executionGate.state == ScriptExecutionGate.State.RETIRED
         })
         generation.dispose()
     }
 
     @Test
     fun `generation freeze blocks every child execution gate`() {
-        val second = object : Script() {}
+        val second = object : EternalScript() {}
+        val secondRuntime = managed(second)
         val generation = ScriptGeneration(
-            listOf(object : Script() {}, second),
+            listOf(managed(object : EternalScript() {}), secondRuntime),
             TestGenerationRuntimeResource()
         )
 
         assertTrue(generation.publish())
-        assertEquals("second", second.executionGate.withActive { "second" })
+        assertEquals("second", secondRuntime.executionGate.withActive { "second" })
 
         assertTrue(generation.tryFreeze())
-        assertNull(second.executionGate.withActive { "blocked" })
+        assertNull(secondRuntime.executionGate.withActive { "blocked" })
         generation.retire()
         generation.dispose()
     }
@@ -61,9 +63,9 @@ class ScriptGenerationTest {
         val events = mutableListOf<String>()
         val generation = ScriptGeneration(
             listOf(
-                LifecycleProbeScript("first", events),
-                LifecycleProbeScript("second", events, failEnable = true),
-                LifecycleProbeScript("never", events)
+                managed(LifecycleProbeScript("first", events)),
+                managed(LifecycleProbeScript("second", events, failEnable = true)),
+                managed(LifecycleProbeScript("never", events))
             ),
             TestGenerationRuntimeResource()
         )
@@ -93,18 +95,19 @@ private class TestGenerationRuntimeResource : GenerationRuntimeResource {
     override fun close() = Unit
 }
 
+private fun managed(script: EternalScript) = ManagedScriptRuntime(script)
+
 private class LifecycleProbeScript(
     private val name: String,
     private val events: MutableList<String>,
-    failEnable: Boolean = false
-) : Script() {
-    init {
-        onEnable {
-            events += "enable:$name"
-            if (failEnable) error("$name enable failed")
-        }
-        onDisable {
-            events += "disable:$name"
-        }
+    private val failEnable: Boolean = false
+) : EternalScript() {
+    override fun onEnable() {
+        events += "enable:$name"
+        if (failEnable) error("$name enable failed")
+    }
+
+    override fun onDisable() {
+        events += "disable:$name"
     }
 }

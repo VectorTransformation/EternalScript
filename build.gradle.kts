@@ -1,3 +1,5 @@
+import java.util.jar.JarFile
+
 plugins {
     `java-library`
     // https://kotlinlang.org/docs/releases.html
@@ -52,6 +54,7 @@ repositories {
 }
 
 dependencies {
+    implementation(project(":eternalscript-api"))
     paperweight.paperDevBundle(paperVersion)
     compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
     compileOnly(kotlin("reflect", kotlinVersion))
@@ -74,6 +77,10 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
 }
+
+evaluationDependsOn(":eternalscript-api")
+val eternalScriptApiJar = project(":eternalscript-api").tasks.named<Jar>("jar")
+val eternalScriptPluginJar = tasks.named<Jar>("jar")
 
 fun libraries(): String {
     val compileOnly = project.configurations.getByName("compileOnly").dependencies
@@ -112,6 +119,7 @@ tasks {
     }
     check {
         dependsOn("checkScripts")
+        dependsOn("verifyApiArchitecture")
     }
     processResources {
         doLast {
@@ -122,7 +130,60 @@ tasks {
         options.release = javaVersion
     }
     jar {
+        dependsOn(eternalScriptApiJar)
+        from(eternalScriptApiJar.map { task -> zipTree(task.archiveFile.get().asFile) })
+        duplicatesStrategy = DuplicatesStrategy.FAIL
         version = pluginVersion()
+    }
+    register("verifyApiArchitecture") {
+        group = "verification"
+        description = "Verifies the public API module boundary and plugin JAR embedding."
+        dependsOn(jar, eternalScriptApiJar)
+
+        doLast {
+            val forbiddenImports = fileTree(
+                project(":eternalscript-api").layout.projectDirectory.dir("src/main")
+            ) {
+                include("**/*.kt", "**/*.java")
+            }.files.filter { source ->
+                source.readText().contains("eternalScript.core")
+            }
+            check(forbiddenImports.isEmpty()) {
+                "The API module imports core sources: ${forbiddenImports.joinToString()}"
+            }
+
+            fun entries(file: File): List<String> =
+                JarFile(file).use { jarFile ->
+                    jarFile.entries().asSequence()
+                        .filterNot { entry -> entry.isDirectory }
+                        .map { entry -> entry.name }
+                        .toList()
+                }
+
+            val apiFile = eternalScriptApiJar.get().archiveFile.get().asFile
+            val pluginFile = eternalScriptPluginJar.get().archiveFile.get().asFile
+            val allApiJarEntries = entries(apiFile)
+            val apiEntries = allApiJarEntries
+                .filter { entry -> entry.startsWith("eternalScript/api/") }
+            val pluginEntries = entries(pluginFile)
+
+            check(apiEntries.isNotEmpty()) { "The API JAR does not contain API classes." }
+            check(allApiJarEntries.none { entry -> entry.startsWith("eternalScript/core/") }) {
+                "The API JAR contains core implementation classes."
+            }
+            val missing = apiEntries.toSet() - pluginEntries.toSet()
+            check(missing.isEmpty()) {
+                "The plugin JAR is missing API entries: ${missing.sorted()}"
+            }
+            val duplicates = pluginEntries
+                .filter { entry -> entry.startsWith("eternalScript/api/") }
+                .groupingBy { entry -> entry }
+                .eachCount()
+                .filterValues { count -> count != 1 }
+            check(duplicates.isEmpty()) {
+                "The plugin JAR contains duplicate API entries: $duplicates"
+            }
+        }
     }
 }
 

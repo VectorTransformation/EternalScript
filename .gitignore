@@ -4,6 +4,7 @@
 /gradlew
 /gradlew.bat
 /build/
+/eternalscript-api/build/
 /script-workspace/build/
 /run/
 /.codegraph/

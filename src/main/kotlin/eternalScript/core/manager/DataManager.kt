@@ -1,7 +1,5 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.PluginStartable
-import eternalScript.api.manager.PluginStoppable
 import eternalScript.core.environment.EnvironmentRefreshRequest
 import eternalScript.core.environment.ScriptEnvironmentCoordinator
 import eternalScript.core.feedback.UserFeedback

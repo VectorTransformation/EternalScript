@@ -1,6 +1,5 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.PluginStoppable
 import eternalScript.core.script.generation.ScriptGenerationCoordinator
 import eternalScript.core.script.generation.ScriptProjectCheckResult
 import eternalScript.core.script.generation.ScriptProjectGenerationSnapshot

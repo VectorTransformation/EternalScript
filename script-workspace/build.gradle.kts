@@ -30,10 +30,11 @@ repositories {
 }
 
 dependencies {
-    implementation(project(":"))
+    implementation(project(":eternalscript-api"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
     implementation("io.papermc.paper:paper-api:$paperVersion")
 
+    scriptProjectTools(project(":"))
     scriptProjectTools(kotlin("compiler-embeddable", kotlinVersion))
     scriptProjectTools(kotlin("reflect", kotlinVersion))
     scriptProjectTools("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")

@@ -1,9 +1,9 @@
 package eternalScript.core.the
 
 import eternalScript.EternalScript
-import eternalScript.api.command.CommandBuilder
-import eternalScript.api.manager.PluginStartable
-import eternalScript.api.manager.PluginStoppable
+import eternalScript.core.command.CommandBuilder
+import eternalScript.core.manager.PluginStartable
+import eternalScript.core.manager.PluginStoppable
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -28,7 +28,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
 import kotlin.reflect.KClass
 
-object Root {
+internal object Root {
     const val ORIGIN = "EternalScript"
 
     val INSTANCE = pluginManager().getPlugin(ORIGIN) as EternalScript

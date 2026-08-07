@@ -1,6 +1,5 @@
 package eternalScript.core.manager
 
-import eternalScript.api.manager.PluginStartable
 import eternalScript.core.data.Config
 import eternalScript.core.metrics.Metrics
 import eternalScript.core.the.Root

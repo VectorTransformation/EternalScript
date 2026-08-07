@@ -8,7 +8,7 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import kotlin.reflect.KClass
 
-class ScriptListenerRegistry(
+internal class ScriptListenerRegistry(
     private val executionGate: ScriptExecutionGate,
     private val registrationGate: ScriptRegistrationGate
 ) : Listener {

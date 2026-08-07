@@ -1,4 +1,4 @@
-package eternalScript.api.command
+package eternalScript.core.command
 
 import com.mojang.brigadier.arguments.ArgumentType
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
@@ -6,28 +6,23 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder
 import io.papermc.paper.command.brigadier.CommandSourceStack
 import io.papermc.paper.command.brigadier.Commands
 
-abstract class CommandBuilder {
+internal abstract class CommandBuilder {
     abstract val builder: LiteralArgumentBuilder<CommandSourceStack>
     open val description: String? = null
     open val aliases: Collection<String> = emptyList()
 
-    open fun builder(
+    fun builder(
         literal: String,
         block: LiteralArgumentBuilder<CommandSourceStack>.() -> Unit
-    ): LiteralArgumentBuilder<CommandSourceStack> {
-        val builder = Commands.literal(literal)
-        block.invoke(builder)
-        return builder
-    }
+    ): LiteralArgumentBuilder<CommandSourceStack> =
+        Commands.literal(literal).apply(block)
 
-    open fun builder(
-        name: String, argumentType: ArgumentType<out Any>,
+    fun builder(
+        name: String,
+        argumentType: ArgumentType<out Any>,
         block: RequiredArgumentBuilder<CommandSourceStack, out Any>.() -> Unit
-    ): RequiredArgumentBuilder<CommandSourceStack, out Any> {
-        val builder = Commands.argument(name, argumentType)
-        block.invoke(builder)
-        return builder
-    }
+    ): RequiredArgumentBuilder<CommandSourceStack, out Any> =
+        Commands.argument(name, argumentType).apply(block)
 
-    fun <T : CommandSourceStack> isOp(context: T) = context.sender.isOp
+    fun <T : CommandSourceStack> isOp(context: T): Boolean = context.sender.isOp
 }

@@ -1,9 +1,9 @@
 package eternalScript.core.script.generation
 
-import eternalScript.api.script.Script
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.project.ScriptProjectSource
 import eternalScript.core.script.project.remapRuntimeStackTrace
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -16,29 +16,29 @@ import kotlinx.coroutines.coroutineScope
  * changed at the generation boundary before any child gate is drained.
  */
 internal class ScriptGeneration(
-    scripts: List<Script>,
+    runtimes: List<ManagedScriptRuntime>,
     private val runtimeResource: GenerationRuntimeResource
 ) {
     private val admissionGate = ScriptExecutionGate()
     private val disposal = GenerationDisposalState()
 
-    private val instances: List<ScriptInstanceRuntime> = scripts.map(::ScriptInstanceRuntime)
-    val scripts: List<Script> = instances.map(ScriptInstanceRuntime::script)
+    internal val instances = runtimes.toList()
+    val scripts = instances.map(ManagedScriptRuntime::script)
 
     init {
         require(this.scripts.isNotEmpty()) {
             "A script generation must contain at least one Script instance."
         }
 
-        val attached = mutableListOf<Script>()
+        val attached = mutableListOf<ManagedScriptRuntime>()
         try {
-            this.scripts.forEach { script ->
-                script.executionGate.attachAdmissionGate(admissionGate)
-                attached += script
+            instances.forEach { runtime ->
+                runtime.executionGate.attachAdmissionGate(admissionGate)
+                attached += runtime
             }
         } catch (exception: Throwable) {
-            attached.asReversed().forEach { script ->
-                script.executionGate.detachAdmissionGate(admissionGate)
+            attached.asReversed().forEach { runtime ->
+                runtime.executionGate.detachAdmissionGate(admissionGate)
             }
             throw exception
         }
@@ -48,12 +48,12 @@ internal class ScriptGeneration(
         get() = admissionGate.state
 
     val isActive: Boolean
-        get() = admissionGate.isActive && scripts.all { current ->
+        get() = admissionGate.isActive && instances.all { current ->
             current.executionGate.isActive
         }
 
     val isDrained: Boolean
-        get() = admissionGate.isDrained && scripts.all { current ->
+        get() = admissionGate.isDrained && instances.all { current ->
             current.executionGate.isDrained
         }
 
@@ -61,7 +61,7 @@ internal class ScriptGeneration(
         get() = runtimeResource.pluginDependencies
 
     fun mapRuntimeExceptions(project: ScriptProjectSource) {
-        scripts.forEach { current ->
+        instances.forEach { current ->
             current.executionGate.mapExceptions(project::remapRuntimeStackTrace)
         }
     }
@@ -70,8 +70,8 @@ internal class ScriptGeneration(
     fun tryFreeze(): Boolean {
         if (!admissionGate.tryFreeze()) return false
 
-        val frozen = mutableListOf<Script>()
-        for (current in scripts) {
+        val frozen = mutableListOf<ManagedScriptRuntime>()
+        for (current in instances) {
             if (!current.executionGate.tryFreeze()) {
                 frozen.asReversed().forEach { alreadyFrozen ->
                     alreadyFrozen.taskScope.open()
@@ -94,27 +94,27 @@ internal class ScriptGeneration(
     fun publish(): Boolean {
         if (
             admissionGate.state != ScriptExecutionGate.State.STAGED ||
-            scripts.any { current ->
+            instances.any { current ->
                 current.executionGate.state != ScriptExecutionGate.State.STAGED
             }
         ) {
-            scripts.forEach { current -> current.taskScope.close() }
+            instances.forEach { current -> current.taskScope.close() }
             return false
         }
 
-        for (current in scripts) {
+        for (current in instances) {
             if (!current.executionGate.publish()) {
                 admissionGate.retire()
-                scripts.forEach { script ->
-                    script.taskScope.close()
-                    script.executionGate.retire()
+                instances.forEach { runtime ->
+                    runtime.taskScope.close()
+                    runtime.executionGate.retire()
                 }
                 return false
             }
         }
 
         if (!admissionGate.publish()) {
-            scripts.forEach { current ->
+            instances.forEach { current ->
                 current.taskScope.close()
                 current.executionGate.retire()
             }
@@ -127,8 +127,8 @@ internal class ScriptGeneration(
     fun restore(): Boolean {
         if (admissionGate.state != ScriptExecutionGate.State.SWAPPING) return false
 
-        val restored = mutableListOf<Script>()
-        for (current in scripts) {
+        val restored = mutableListOf<ManagedScriptRuntime>()
+        for (current in instances) {
             current.taskScope.open()
             if (!current.executionGate.restore()) {
                 current.taskScope.close()
@@ -156,7 +156,7 @@ internal class ScriptGeneration(
 
     fun retire(): Boolean {
         var changed = admissionGate.retire()
-        scripts.forEach { current ->
+        instances.forEach { current ->
             current.taskScope.close()
             changed = current.executionGate.retire() || changed
         }
@@ -165,10 +165,9 @@ internal class ScriptGeneration(
 
     suspend fun cancelTrackedWorkAndJoin(timeoutMillis: Long): Boolean =
         coroutineScope {
-            instances
-                .map { instance ->
+            instances.map { instance ->
                     async {
-                        instance.script.taskScope.cancelTrackedWorkAndJoin(timeoutMillis)
+                        instance.taskScope.cancelTrackedWorkAndJoin(timeoutMillis)
                     }
                 }
                 .awaitAll()
@@ -176,11 +175,11 @@ internal class ScriptGeneration(
         }
 
     fun cancelTrackedWork() {
-        scripts.forEach { current -> current.taskScope.cancelTrackedWork() }
+        instances.forEach { current -> current.taskScope.cancelTrackedWork() }
     }
 
     fun activate() {
-        instances.forEach(ScriptInstanceRuntime::activate)
+        instances.forEach(ManagedScriptRuntime::activate)
     }
 
     fun deactivate() {
@@ -197,7 +196,7 @@ internal class ScriptGeneration(
             instances.forEach { instance ->
                 instance.dispose(failures)
                 cleanup(failures) {
-                    instance.script.executionGate.detachAdmissionGate(admissionGate)
+                    instance.executionGate.detachAdmissionGate(admissionGate)
                 }
             }
             cleanup(failures, runtimeResource::close)

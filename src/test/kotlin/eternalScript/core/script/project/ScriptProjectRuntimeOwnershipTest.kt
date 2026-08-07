@@ -1,7 +1,8 @@
 package eternalScript.core.script.project
 
-import eternalScript.api.script.Script
+import eternalScript.api.script.EternalScript
 import eternalScript.core.script.generation.GenerationRuntimeResource
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -11,7 +12,7 @@ class ScriptProjectRuntimeOwnershipTest {
     fun `transferred runtime is closed only by the managed generation`() {
         val closes = AtomicInteger()
         val runtime = ScriptProjectRuntime(
-            scripts = listOf(object : Script() {}),
+            runtimes = listOf(ManagedScriptRuntime(object : EternalScript() {})),
             runtimeResource = CloseCountingGenerationResource(closes)
         )
 

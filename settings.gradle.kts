@@ -10,4 +10,4 @@ pluginManagement {
 
 rootProject.name = "EternalScript"
 
-include("script-workspace")
+include("eternalscript-api", "script-workspace")

@@ -1,7 +1,7 @@
 package eternalScript.core.script.runtime
 
 import eternalScript.core.script.command.ScriptCommand
-import eternalScript.core.script.command.ScriptCommandBuilder
+import eternalScript.api.script.command.ScriptCommandBuilder
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
 import eternalScript.core.the.Root

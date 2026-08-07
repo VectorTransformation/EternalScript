@@ -52,7 +52,6 @@ class PresentationBoundaryContractTest {
             symbol = "CommandSender",
             allowedOwners = setOf(
                 "eternalScript/core/script/command/ScriptCommand.kt",
-                "eternalScript/core/script/command/ScriptCommandBuilder.kt",
                 "eternalScript/core/feedback/LocalizedUserFeedback.kt"
             )
         )

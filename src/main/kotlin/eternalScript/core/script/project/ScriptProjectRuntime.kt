@@ -1,8 +1,9 @@
 package eternalScript.core.script.project
 
-import eternalScript.api.script.Script
+import eternalScript.api.script.EternalScript
 import eternalScript.core.script.generation.GenerationRuntimeResource
 import eternalScript.core.script.generation.ScriptGeneration
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -13,13 +14,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  * own registration and execution state.
  */
 internal class ScriptProjectRuntime(
-    val scripts: List<Script>,
+    private val runtimes: List<ManagedScriptRuntime>,
     private val runtimeResource: GenerationRuntimeResource
 ) : AutoCloseable {
     private val ownershipTransferred = AtomicBoolean()
 
     init {
-        require(scripts.isNotEmpty()) {
+        require(runtimes.isNotEmpty()) {
             "An evaluated EternalScript project must create at least one script."
         }
     }
@@ -33,7 +34,7 @@ internal class ScriptProjectRuntime(
             "The evaluated script runtime has already transferred ownership."
         }
         return try {
-            ScriptGeneration(scripts, runtimeResource)
+            ScriptGeneration(runtimes, runtimeResource)
         } catch (exception: Throwable) {
             ownershipTransferred.set(false)
             throw exception
@@ -44,9 +45,9 @@ internal class ScriptProjectRuntime(
         if (!ownershipTransferred.compareAndSet(false, true)) return
         var failure: Throwable? = null
 
-        scripts.forEach { script ->
+        runtimes.forEach { runtime ->
             try {
-                script.disposeRuntime()
+                runtime.disposeRuntime()
             } catch (exception: Throwable) {
                 if (failure == null) {
                     failure = exception

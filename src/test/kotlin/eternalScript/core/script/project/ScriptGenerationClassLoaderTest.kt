@@ -1,6 +1,6 @@
 package eternalScript.core.script.project
 
-import eternalScript.api.script.Script
+import eternalScript.api.script.EternalScript
 import eternalScript.core.script.classloading.DisabledScriptPluginClassException
 import eternalScript.core.script.classloading.ScriptGenerationClassLoader
 import eternalScript.core.script.classloading.ScriptGenerationRegistry
@@ -9,6 +9,7 @@ import eternalScript.core.script.classpath.ScriptPluginClasspathPlugin
 import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
 import eternalScript.core.script.classpath.ownedClassLoaders
 import eternalScript.core.script.generation.GenerationRuntimeHandle
+import eternalScript.core.script.runtime.ManagedScriptRuntime
 import pluginfixtures.identity.DuplicateApi
 import net.kyori.pluginfixture.PluginOnlyApi
 import scriptfixtures.GeneratedReference
@@ -39,20 +40,23 @@ class ScriptGenerationClassLoaderTest {
             emptySet()
         )
         val jar = testJar()
-        val scripts = listOf(object : Script() {}, object : Script() {})
+        val runtimes = listOf(
+            ManagedScriptRuntime(object : EternalScript() {}),
+            ManagedScriptRuntime(object : EternalScript() {})
+        )
         var retains = 0
         var releases = 0
         val handle = GenerationRuntimeHandle(
             loader,
             jar,
-            scripts,
+            runtimes,
             retainGenerationJar = { retains += 1 },
             releaseGenerationJar = { releases += 1 }
         )
 
         try {
-            scripts.forEach { script ->
-                assertSame(loader, script.executionGate.contextClassLoader())
+            runtimes.forEach { runtime ->
+                assertSame(loader, runtime.executionGate.contextClassLoader())
             }
             assertEquals(1, retains)
             assertEquals(0, releases)
@@ -62,8 +66,8 @@ class ScriptGenerationClassLoaderTest {
             Files.deleteIfExists(jar)
         }
 
-        scripts.forEach { script ->
-            assertNull(script.executionGate.contextClassLoader())
+        runtimes.forEach { runtime ->
+            assertNull(runtime.executionGate.contextClassLoader())
         }
         assertEquals(1, releases)
     }
@@ -79,11 +83,14 @@ class ScriptGenerationClassLoaderTest {
             emptySet()
         )
         val jar = testJar()
-        val scripts = listOf(object : Script() {}, object : Script() {})
+        val runtimes = listOf(
+            ManagedScriptRuntime(object : EternalScript() {}),
+            ManagedScriptRuntime(object : EternalScript() {})
+        )
         val handle = GenerationRuntimeHandle(
             loader,
             jar,
-            scripts,
+            runtimes,
             retainGenerationJar = {},
             releaseGenerationJar = { error("release failed") }
         )
@@ -94,8 +101,8 @@ class ScriptGenerationClassLoaderTest {
             }
 
             assertEquals("release failed", failure.message)
-            scripts.forEach { script ->
-                assertNull(script.executionGate.contextClassLoader())
+            runtimes.forEach { runtime ->
+                assertNull(runtime.executionGate.contextClassLoader())
             }
             handle.close()
         } finally {
@@ -120,7 +127,10 @@ class ScriptGenerationClassLoaderTest {
         val handle = GenerationRuntimeHandle(
             loader,
             jar,
-            listOf(object : Script() {}, object : Script() {}),
+            listOf(
+                ManagedScriptRuntime(object : EternalScript() {}),
+                ManagedScriptRuntime(object : EternalScript() {})
+            ),
             retainGenerationJar = {},
             releaseGenerationJar = {}
         )

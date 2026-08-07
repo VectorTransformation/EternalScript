@@ -8,12 +8,11 @@ class ScriptRegistrationLifecycleTest {
     @Test
     fun `activation definitions are replaced instead of accumulated on rollback`() {
         val lifecycle = ScriptRegistrationLifecycle<String>()
-        lifecycle.add("constructor", registrationGateOpen = false)
 
         lifecycle.beginActivation()
         lifecycle.add("first-cycle", registrationGateOpen = true)
         assertEquals(
-            listOf("constructor", "first-cycle"),
+            listOf("first-cycle"),
             lifecycle.activate()
         )
         lifecycle.deactivate()
@@ -22,9 +21,18 @@ class ScriptRegistrationLifecycleTest {
         lifecycle.add("second-cycle", registrationGateOpen = true)
 
         assertEquals(
-            listOf("constructor", "second-cycle"),
+            listOf("second-cycle"),
             lifecycle.activate()
         )
+    }
+
+    @Test
+    fun `constructor definitions are rejected`() {
+        val lifecycle = ScriptRegistrationLifecycle<String>()
+
+        assertFailsWith<IllegalStateException> {
+            lifecycle.add("constructor", registrationGateOpen = false)
+        }
     }
 
     @Test

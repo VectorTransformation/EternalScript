@@ -2,7 +2,6 @@ package eternalScript.core.command
 
 import com.mojang.brigadier.Command
 import com.mojang.brigadier.context.CommandContext
-import eternalScript.api.command.CommandBuilder
 import eternalScript.core.feedback.UserFeedback
 import eternalScript.core.feedback.UserFeedbackChannels
 import eternalScript.core.feedback.UserFeedbackEvent
@@ -11,7 +10,7 @@ import eternalScript.core.workspace.WorkspaceManager
 import io.papermc.paper.command.brigadier.CommandSourceStack
 
 /** Administrative command surface for the one active Kotlin script project. */
-object MainCommand : CommandBuilder() {
+internal object MainCommand : CommandBuilder() {
     override val builder = builder("eternalscript") {
         requires(::isOp)
         executes(::status)
