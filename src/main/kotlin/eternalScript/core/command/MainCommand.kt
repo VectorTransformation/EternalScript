@@ -4,9 +4,7 @@ import com.mojang.brigadier.Command
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.core.feedback.UserFeedback
 import eternalScript.core.feedback.UserFeedbackEvent
-import eternalScript.core.manager.DataManager
 import eternalScript.core.manager.ScriptProjectStatus
-import eternalScript.core.workspace.WorkspaceManager
 import eternalScript.core.workspace.WorkspaceStatus
 import io.papermc.paper.command.brigadier.CommandSourceStack
 

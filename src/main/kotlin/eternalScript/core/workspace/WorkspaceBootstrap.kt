@@ -11,7 +11,7 @@ import java.util.zip.ZipFile
 /**
  * Creates the plugin-owned workspace and restores bundled resources.
  *
- * Project execution remains owned by DataManager/ScriptManager; this object
+ * Project execution remains owned by ProjectController/ScriptManager; this object
  * only performs the one-time workspace bootstrap and returns its diagnostics.
  */
 internal class WorkspaceBootstrap(

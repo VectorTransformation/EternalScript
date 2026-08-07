@@ -7,8 +7,8 @@ import eternalScript.core.environment.ScriptEnvironmentCoordinator
 import eternalScript.core.feedback.LocaleCatalog
 import eternalScript.core.feedback.UserFeedbackChannels
 import eternalScript.core.manager.ConfigManager
-import eternalScript.core.manager.DataManager
 import eternalScript.core.manager.MetricsService
+import eternalScript.core.manager.ProjectController
 import eternalScript.core.manager.ReloadManager
 import eternalScript.core.manager.ScriptManager
 import eternalScript.core.script.classloading.ScriptGenerationRegistry
@@ -90,7 +90,7 @@ internal class PluginRuntime(plugin: EternalScript) {
     )
     private val generationCoordinator = ScriptGenerationCoordinator(generationEngine)
     private val scriptManager = ScriptManager(generationCoordinator)
-    private val dataManager = DataManager(
+    private val projectController = ProjectController(
         host,
         server,
         globalExecution,
@@ -106,7 +106,7 @@ internal class PluginRuntime(plugin: EternalScript) {
         plugin = host.plugin,
         enabled = { config.value(Config.METRICS) }
     )
-    private val command = MainCommand(dataManager, workspace::status, feedback::reply)
+    private val command = MainCommand(projectController, workspace::status, feedback::reply)
 
     fun start() {
         synchronized(lifecycleLock) {
@@ -117,7 +117,7 @@ internal class PluginRuntime(plugin: EternalScript) {
         try {
             globalExecution.start()
             server.registerCommand(command)
-            dataManager.start()
+            projectController.start()
             metrics.start()
             synchronized(lifecycleLock) {
                 state = State.RUNNING
@@ -142,7 +142,7 @@ internal class PluginRuntime(plugin: EternalScript) {
         if (!shouldStop) return
 
         val failures = mutableListOf<Throwable>()
-        stop(failures, dataManager::stop)
+        stop(failures, projectController::stop)
         stop(failures, scriptManager::stop)
         stop(failures, metrics::stop)
         stop(failures, environment::clear)
