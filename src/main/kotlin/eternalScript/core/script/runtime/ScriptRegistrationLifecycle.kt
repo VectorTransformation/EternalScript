@@ -13,7 +13,7 @@ internal class ScriptRegistrationLifecycle<T> {
     fun beginActivation() {
         synchronized(monitor) {
             check(phase == Phase.INACTIVE) {
-                "Script registration lifecycle cannot begin activation from $phase."
+                "EternalScript registration lifecycle cannot begin activation from $phase."
             }
             activationDefinitions.clear()
             runtimeRegistrations.clear()
@@ -44,14 +44,16 @@ internal class ScriptRegistrationLifecycle<T> {
                     "Commands and events can only be registered from onEnable()."
                 )
 
-                Phase.DISPOSED -> error("The Script registration lifecycle is disposed.")
+                Phase.DISPOSED -> error(
+                    "The EternalScript registration lifecycle is disposed."
+                )
             }
         }
 
     /** Marks the cycle active before callers publish its definitions. */
     fun activate(): List<T> = synchronized(monitor) {
         check(phase == Phase.ACTIVATING) {
-            "Script registration lifecycle cannot activate from $phase."
+            "EternalScript registration lifecycle cannot activate from $phase."
         }
         phase = Phase.ACTIVE
         currentDefinitionsLocked()

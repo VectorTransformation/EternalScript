@@ -73,7 +73,7 @@ internal class GlobalScriptOperationRuntime(
 }
 
 internal class ScriptOperationController(
-    private val lifecycle: DataManagerLifecycle,
+    private val lifecycle: ProjectLifecycleFence,
     private val runtime: ScriptOperationRuntime,
     private val logger: Logger,
     private val emit: suspend (UserFeedback, UserFeedbackEvent) -> Unit,

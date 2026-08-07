@@ -35,7 +35,7 @@ internal class ProjectController(
     generationRegistry: ScriptGenerationRegistry,
     private val feedbackChannels: UserFeedbackChannels
 ) : PluginStartable, PluginStoppable, ProjectCommandController {
-    private val lifecycle = DataManagerLifecycle()
+    private val lifecycle = ProjectLifecycleFence()
     private val stateLock = Any()
     private var automaticLoadState = AutomaticProjectLoadState.NOT_ATTEMPTED
     private var startupWorkspace: WorkspaceUpdateResult? = null

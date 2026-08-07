@@ -4,37 +4,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
-
-internal class DataManagerLifecycle {
-    private data class State(
-        val session: Long,
-        val open: Boolean
-    )
-
-    private val state = AtomicReference(State(session = 0, open = false))
-
-    fun open(): Long =
-        state.updateAndGet { current ->
-            if (current.open) current else State(current.session + 1, true)
-        }.session
-
-    fun close(): Long =
-        state.updateAndGet { current ->
-            if (!current.open) current else State(current.session + 1, false)
-        }.session
-
-    fun openSession(): Long? =
-        state.get().let { current ->
-            current.session.takeIf { current.open }
-        }
-
-    fun accepts(session: Long): Boolean =
-        state.get().let { current ->
-            current.open && current.session == session
-        }
-}
 
 internal fun awaitOperationShutdown(
     operation: Job?,

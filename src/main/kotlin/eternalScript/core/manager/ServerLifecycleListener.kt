@@ -14,7 +14,7 @@ import org.bukkit.event.server.ServerLoadEvent
 internal class ServerLifecycleListener(
     private val host: PluginHost,
     private val server: ServerAccess,
-    private val lifecycle: DataManagerLifecycle,
+    private val lifecycle: ProjectLifecycleFence,
     private val scriptManager: ScriptManager,
     private val environment: ScriptEnvironmentCoordinator,
     private val generationRegistry: ScriptGenerationRegistry,

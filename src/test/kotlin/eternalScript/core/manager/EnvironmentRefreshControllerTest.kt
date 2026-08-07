@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 class EnvironmentRefreshControllerTest {
     @Test
     fun `requests merge until the server is ready`() {
-        val lifecycle = DataManagerLifecycle().apply { open() }
+        val lifecycle = ProjectLifecycleFence().apply { open() }
         var ready = false
         val dispatched = mutableListOf<EnvironmentRefreshRequest>()
         val controller = EnvironmentRefreshController(
@@ -54,7 +54,7 @@ class EnvironmentRefreshControllerTest {
 
     @Test
     fun `failed dispatch is requeued and retried outside the queue lock`() {
-        val lifecycle = DataManagerLifecycle().apply { open() }
+        val lifecycle = ProjectLifecycleFence().apply { open() }
         var attempts = 0
         lateinit var controller: EnvironmentRefreshController
         controller = EnvironmentRefreshController(

@@ -12,7 +12,7 @@ import kotlinx.coroutines.coroutineScope
  * Lifecycle aggregate for one evaluated project generation.
  *
  * It owns one generation-wide admission gate, a deterministic list of
- * per-Script runtimes, and the shared runtime resource. Control-plane state is
+ * per-entry runtimes, and the shared runtime resource. Control-plane state is
  * changed at the generation boundary before any child gate is drained.
  */
 internal class ScriptGeneration(
@@ -27,7 +27,7 @@ internal class ScriptGeneration(
 
     init {
         require(this.scripts.isNotEmpty()) {
-            "A script generation must contain at least one Script instance."
+            "A script generation must contain at least one EternalScript entry."
         }
 
         val attached = mutableListOf<ManagedScriptRuntime>()
@@ -76,7 +76,7 @@ internal class ScriptGeneration(
                 frozen.asReversed().forEach { alreadyFrozen ->
                     alreadyFrozen.taskScope.open()
                     check(alreadyFrozen.executionGate.restore()) {
-                        "A partially frozen Script could not be restored."
+                        "A partially frozen EternalScript entry could not be restored."
                     }
                 }
                 check(admissionGate.restore()) {
@@ -135,7 +135,7 @@ internal class ScriptGeneration(
                 restored.asReversed().forEach { alreadyRestored ->
                     alreadyRestored.taskScope.close()
                     check(alreadyRestored.executionGate.tryFreeze()) {
-                        "A partially restored Script could not be frozen again."
+                        "A partially restored EternalScript entry could not be frozen again."
                     }
                 }
                 return false
@@ -148,7 +148,7 @@ internal class ScriptGeneration(
         restored.asReversed().forEach { alreadyRestored ->
             alreadyRestored.taskScope.close()
             check(alreadyRestored.executionGate.tryFreeze()) {
-                "A Script could not be frozen after generation restore failed."
+                "An EternalScript entry could not be frozen after generation restore failed."
             }
         }
         return false

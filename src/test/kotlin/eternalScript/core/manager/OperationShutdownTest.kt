@@ -1,7 +1,7 @@
 package eternalScript.core.manager
 
-import eternalScript.core.runtime.GlobalTaskQueue
 import eternalScript.core.runtime.GlobalTaskOwner
+import eternalScript.core.runtime.GlobalTaskQueue
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,12 +15,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class DataManagerShutdownTest {
+class OperationShutdownTest {
     @Test
     fun `global shutdown pumps handoff that completes operation`() {
         val operation = Job()
@@ -97,29 +95,5 @@ class DataManagerShutdownTest {
 
         assertFalse(stopped)
         operation.cancel()
-    }
-
-    @Test
-    fun `timed out operation session cannot mutate after register reopens`() {
-        val lifecycle = DataManagerLifecycle()
-        val oldSession = lifecycle.open()
-
-        lifecycle.close()
-        val newSession = lifecycle.open()
-
-        assertTrue(newSession > oldSession)
-        assertFalse(lifecycle.accepts(oldSession))
-        assertTrue(lifecycle.accepts(newSession))
-    }
-
-    @Test
-    fun `closed data lifecycle exposes no operation session`() {
-        val lifecycle = DataManagerLifecycle()
-
-        assertNull(lifecycle.openSession())
-        val session = lifecycle.open()
-        assertEquals(session, lifecycle.openSession())
-        lifecycle.close()
-        assertNull(lifecycle.openSession())
     }
 }

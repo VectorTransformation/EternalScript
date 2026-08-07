@@ -42,7 +42,8 @@ internal class ScriptCommandRegistry(
                 commandKeys.overlaps(scriptCommandKeys(command.name, command.aliases))
             }
         ) {
-            "Command ${builder.name} conflicts with another command in the same Script."
+            "Command ${builder.name} conflicts with another command in the " +
+                "same EternalScript entry."
         }
         val command = ScriptCommand(builder, executionGate)
         if (

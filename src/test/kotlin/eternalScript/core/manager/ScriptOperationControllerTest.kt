@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
 class ScriptOperationControllerTest {
     @Test
     fun `operations serialize and completion releases the next operation`() = runBlocking {
-        val lifecycle = DataManagerLifecycle().apply { open() }
+        val lifecycle = ProjectLifecycleFence().apply { open() }
         val runtime = FakeOperationRuntime()
         val events = mutableListOf<UserFeedbackEvent>()
         val idleCalls = AtomicInteger()

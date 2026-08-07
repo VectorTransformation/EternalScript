@@ -7,7 +7,7 @@ import eternalScript.core.environment.EnvironmentRefreshRequest
  * while holding its queue lock.
  */
 internal class EnvironmentRefreshController(
-    private val lifecycle: DataManagerLifecycle,
+    private val lifecycle: ProjectLifecycleFence,
     private val canDrain: () -> Boolean,
     private val operationActive: () -> Boolean,
     private val dispatch: (EnvironmentRefreshRequest) -> Boolean

@@ -9,9 +9,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * The evaluated runtime of one ordinary Kotlin project generation.
  *
- * A generation may contain any number of class-based [Script] instances. The
- * generation owns the shared class-loader resource while each script keeps its
- * own registration and execution state.
+ * A generation may contain any number of class-based [EternalScript] entries.
+ * The generation owns the shared class-loader resource while each entry keeps
+ * its own registration and execution state.
  */
 internal class ScriptProjectRuntime(
     private val runtimes: List<ManagedScriptRuntime>,

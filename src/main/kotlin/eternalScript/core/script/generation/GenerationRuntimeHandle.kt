@@ -12,9 +12,10 @@ internal interface GenerationRuntimeResource : AutoCloseable {
 }
 
 /**
- * The single owner of resources shared by every Script in one generation.
+ * The single owner of resources shared by every EternalScript entry in one
+ * generation.
  *
- * Per-Script registrations and tasks are disposed by [ScriptInstanceRuntime].
+ * Per-entry registrations and tasks are disposed by [ManagedScriptRuntime].
  * The class loader, compiled JAR lease, and plugin dependency state are
  * generation resources and therefore close exactly once here.
  */
@@ -36,7 +37,7 @@ internal class GenerationRuntimeHandle(
 
     init {
         require(this.runtimes.isNotEmpty()) {
-            "A generation runtime handle requires at least one Script instance."
+            "A generation runtime handle requires at least one EternalScript entry."
         }
 
         retainGenerationJar(generationJar)
