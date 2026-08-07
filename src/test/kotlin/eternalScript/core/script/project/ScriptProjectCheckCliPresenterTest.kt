@@ -1,7 +1,9 @@
 package eternalScript.core.script.project
 
 import eternalScript.core.script.generation.ScriptProjectCheckOutcome
+import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -33,5 +35,26 @@ class ScriptProjectCheckCliPresenterTest {
         assertTrue(
             ScriptProjectCheckCliPresenter.allowedEmptyLines().first().contains("allowed=true")
         )
+
+        val passed = ScriptProjectCheckCliPresenter.lines(
+            ScriptProjectCheckCliSummary(
+                outcome = ScriptProjectCheckOutcome.PASSED,
+                sourceCount = 2,
+                diagnosticCount = 0
+            )
+        )
+        assertContains(passed.first(), "compile-only")
+        assertContains(passed.last(), "/es check")
+    }
+
+    @Test
+    fun `missing source root is treated as an empty project`() {
+        val missing = Files.createTempDirectory("eternal-script-missing-source-test")
+            .resolve("scripts")
+        try {
+            assertTrue(missing.projectFiles(ScriptProjectCheckMode.RUNTIME).isEmpty())
+        } finally {
+            missing.parent.toFile().deleteRecursively()
+        }
     }
 }

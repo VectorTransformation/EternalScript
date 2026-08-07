@@ -23,6 +23,9 @@ internal object ScriptClassReferenceAnalyzer {
         val contents = readJarClassReferences(generationJar)
         val pluginOwners = sortedSetOf(String.CASE_INSENSITIVE_ORDER)
         val conflicts = mutableListOf<ScriptClassIdentityConflict>()
+        contents.declaredClassNames.mapNotNullTo(conflicts) { className ->
+            classpathSnapshot.declaredClassConflict(className)
+        }
         contents.referencedClassNames
             .asSequence()
             .filterNot(contents.declaredClassNames::contains)
@@ -36,10 +39,8 @@ internal object ScriptClassReferenceAnalyzer {
                                     className,
                                     parentType
                                 )
-                                if (owners.isNotEmpty()) {
-                                    classpathSnapshot.resolvePluginClass(className)
-                                    pluginOwners.addAll(owners)
-                                }
+                                classpathSnapshot.resolvePluginClass(className)
+                                pluginOwners.addAll(owners)
                                 return@forEach
                             }
                     }

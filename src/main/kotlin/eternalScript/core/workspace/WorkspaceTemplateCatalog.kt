@@ -28,7 +28,7 @@ internal data class WorkspaceTemplateCatalog(
 
 internal object DefaultWorkspaceTemplates {
     const val SCHEMA_VERSION = 1
-    const val TEMPLATE_VERSION = "4"
+    const val TEMPLATE_VERSION = "5"
     const val GRADLE_VERSION = "9.6.1"
     const val KOTLIN_VERSION = "2.4.10"
     const val JAVA_VERSION = 25

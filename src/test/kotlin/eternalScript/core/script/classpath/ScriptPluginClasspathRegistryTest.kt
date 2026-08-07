@@ -68,6 +68,7 @@ class ScriptPluginClasspathRegistryTest {
         try {
             val parent = javaClass.classLoader
             val loader = PassthroughClassLoader(parent)
+            val embeddedLoader = PassthroughClassLoader(parent)
             val snapshot = ScriptPluginClasspathRegistry.buildSnapshot(
                 ScriptPluginClasspathCapture(
                     revision = 1,
@@ -78,7 +79,8 @@ class ScriptPluginClasspathRegistryTest {
                             "Alpha",
                             "1.0.0",
                             loader,
-                            listOf(files.beta, files.alpha)
+                            listOf(files.beta, files.alpha),
+                            ownedClassLoaders = listOf(loader, embeddedLoader)
                         )
                     )
                 ),
@@ -96,6 +98,10 @@ class ScriptPluginClasspathRegistryTest {
                     file.toPath().toAbsolutePath().normalize().toFile()
                 },
                 snapshot.plugins.single().files
+            )
+            assertEquals(
+                listOf(loader, embeddedLoader),
+                snapshot.plugins.single().ownedClassLoaders
             )
             assertEquals(
                 listOf(files.beta, files.core, files.alpha, files.library).map { file ->

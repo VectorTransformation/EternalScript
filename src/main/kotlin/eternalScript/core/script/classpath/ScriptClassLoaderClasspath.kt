@@ -17,30 +17,38 @@ import java.util.IdentityHashMap
  * class names.
  */
 internal fun ClassLoader.embeddedClasspathFiles(): List<File> {
+    val files = linkedMapOf<String, File>()
+    ownedClassLoaders().forEach { loader ->
+        if (loader !is URLClassLoader) return@forEach
+        loader.getURLs()
+            .mapNotNull { url -> url.toClasspathFile() }
+            .forEach { file ->
+                val normalized = file.toPath().toAbsolutePath().normalize().toFile()
+                if (normalized.exists()) {
+                    files.putIfAbsent(normalized.normalizedClasspathKey(), normalized)
+                }
+            }
+    }
+    return files.values.toList()
+}
+
+/**
+ * Returns the plugin loader itself plus private loader delegates that define
+ * classes on its behalf. Parent loaders are intentionally not traversed.
+ */
+internal fun ClassLoader.ownedClassLoaders(): List<ClassLoader> {
     val queue = ArrayDeque<ClassLoader>()
     val visited = IdentityHashMap<ClassLoader, Unit>()
-    val files = linkedMapOf<String, File>()
+    val loaders = mutableListOf<ClassLoader>()
     queue += this
 
     while (queue.isNotEmpty()) {
         val loader = queue.removeFirst()
         if (visited.put(loader, Unit) != null) continue
-
-        if (loader is URLClassLoader) {
-            loader.getURLs()
-                .mapNotNull { url -> url.toClasspathFile() }
-                .forEach { file ->
-                    val normalized = file.toPath().toAbsolutePath().normalize().toFile()
-                    if (normalized.exists()) {
-                        files.putIfAbsent(normalized.normalizedClasspathKey(), normalized)
-                    }
-                }
-        }
-
+        loaders += loader
         loader.embeddedClassLoaders().forEach(queue::addLast)
     }
-
-    return files.values.toList()
+    return loaders
 }
 
 private fun ClassLoader.embeddedClassLoaders(): List<ClassLoader> = buildList {

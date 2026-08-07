@@ -11,22 +11,26 @@ or deployment step.
 2. Copy `scripts/-examples/hello.kt` to `scripts/hello.kt`. Paths whose name
    starts with `-` are examples and are not loaded by the server.
 3. Run `gradlew.bat check` on Windows or `./gradlew check` on Linux/macOS.
-4. Run `/es reload` on the server, then `/es status`.
+4. Run `/es check` on the server to validate its live plugin classloaders.
+5. Run `/es reload` on the server, then `/es status`.
 
 ## Normal edit loop
 
 ```text
 Edit scripts/*.kt
-→ run gradlew.bat check (or /es check)
+→ run gradlew.bat check
+→ run /es check for live server classloader validation
 → run /es reload
 → run /es status when you need the active state
 ```
 
 `compileKotlin` provides normal Kotlin diagnostics and IDE completion.
-`checkScripts` uses the same project compiler as the server without evaluating
-or activating the project. `check` runs both checks. An empty runtime source
-set is reported as `NO_SOURCES` and fails the check until a lowercase
-`scripts/*.kt` source is added.
+`checkScripts` uses the same Kotlin project compiler as the server, but it is a
+compile-only check: a separate Gradle process cannot reproduce the server's live
+plugin classloader identities. Run `/es check` before `/es reload` for that
+server-side validation. `check` runs both local compilation tasks. An empty
+runtime source set is reported as `NO_SOURCES` and fails the check until a
+lowercase `scripts/*.kt` source is added.
 
 Only lowercase `.kt` files are included. A file is ignored when its name or
 any parent path segment starts with `-`.

@@ -6,96 +6,132 @@ import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
 import eternalScript.core.the.Root
 import org.bukkit.command.Command
-import java.util.concurrent.ConcurrentHashMap
 
 internal class ScriptCommandRegistry(
     private val executionGate: ScriptExecutionGate,
-    private val registrationGate: ScriptRegistrationGate
+    private val registrationGate: ScriptRegistrationGate,
+    private val commandLookup: (String) -> Command? = { key -> commandMap.getCommand(key) },
+    private val commandRegistrar: (Command) -> Boolean = { command ->
+        commandMap.register(command.name, prefix, command)
+    },
+    private val commandRemover: (Command) -> Unit = ::removeCommand,
+    private val commandUpdater: () -> Unit = ::updateOnlineCommands
 ) {
-    companion object {
-        private val commandMap by lazy { Root.INSTANCE.server.commandMap }
-        private val knownCommands by lazy { commandMap.knownCommands }
-        private val prefix = Root.ORIGIN.lowercase()
-    }
-    private val definitions = ConcurrentHashMap.newKeySet<Command>()
-    private val runtimeCommands = ConcurrentHashMap.newKeySet<Command>()
+    private val registrations = ScriptRegistrationLifecycle<Command>()
 
-    @Volatile
-    private var active = false
+    internal fun beginActivation() {
+        registrations.beginActivation()
+    }
 
     fun addCommand(builder: ScriptCommandBuilder) {
-        check(!active || registrationGate.isOpen) {
-            "Commands can only be registered at script top level or during the enable lifecycle."
-        }
         val commandKeys = commandKeys(builder.name, builder.aliases)
-        if (commandKeys.any { commandMap.getCommand(it) !is ScriptCommand }) {
-            if (commandKeys.any { commandMap.getCommand(it) != null }) return
-            commands().forEach { command ->
-                if (commandKeys(command.name, command.aliases).any { commandMap.getCommand(it) != null }) return
+        check(
+            commands().none { command ->
+                commandKeys.overlaps(commandKeys(command.name, command.aliases))
             }
+        ) {
+            "Command ${builder.name} conflicts with another command in the same Script."
         }
         val command = ScriptCommand(builder, executionGate)
-        if (active) {
-            runtimeCommands.add(command)
-            commandMap.register(command.name, prefix, command)
+        if (
+            registrations.add(
+                command,
+                registrationGateOpen = registrationGate.isOpen
+            ) == ScriptRegistrationLifecycle.Placement.LIVE
+        ) {
+            requireCommandKeysAvailable(command)
+            check(commandRegistrar(command)) {
+                "Command ${command.name} could not be registered."
+            }
             updateCommands()
-        } else {
-            definitions.add(command)
         }
     }
 
-    fun commandKeys(name: String, aliases: List<String>) = (listOf(name) + aliases).flatMap { listOf(it, "$prefix:$it") }
-
     fun register() {
-        if (active) return
-        if (definitions.isEmpty()) {
-            active = true
-            return
+        val commands = registrations.activate()
+        commands.forEach { command ->
+            requireCommandKeysAvailable(command)
+            check(commandRegistrar(command)) {
+                "Command ${command.name} could not be registered."
+            }
         }
-        definitions.forEach { command ->
-            commandMap.register(command.name, prefix, command)
-        }
-        active = true
-        updateCommands()
+        if (commands.isNotEmpty()) updateCommands()
     }
 
     fun unregister() {
-        val registered = commands()
+        val release = registrations.deactivate()
+        if (!release.wasActive) return
+        val registered = release.registrations
         registered.forEach { command ->
-            runCatching {
-                commandKeys(command.name, command.aliases).forEach { key ->
-                    if (knownCommands[key] === command) {
-                        knownCommands.remove(key)
-                    }
-                }
-                command.unregister(commandMap)
-            }
+            runCatching { commandRemover(command) }
         }
-        active = false
-        runtimeCommands.clear()
         if (registered.isNotEmpty()) {
             updateCommands()
         }
     }
 
     fun clear() {
-        if (active) {
-            unregister()
-        } else {
-            runtimeCommands.clear()
+        val release = registrations.dispose()
+        if (!release.wasActive) return
+        release.registrations.forEach { command ->
+            runCatching { commandRemover(command) }
         }
-        definitions.clear()
+        if (release.registrations.isNotEmpty()) {
+            updateCommands()
+        }
     }
 
-    private fun commands() = definitions + runtimeCommands
+    private fun commands() = registrations.snapshot()
+
+    private fun requireCommandKeysAvailable(command: Command) {
+        val occupied = commandKeys(command.name, command.aliases)
+            .mapNotNull(commandLookup)
+            .firstOrNull()
+            ?: return
+        val owner = if (occupied is ScriptCommand) {
+            "another EternalScript entry"
+        } else {
+            "an existing server command"
+        }
+        error("Command ${command.name} conflicts with $owner (${occupied.name}).")
+    }
 
     fun updateCommands() {
-        Root.onlinePlayers().forEach { player ->
-            player.scheduler.run(
-                Root.INSTANCE,
-                { player.updateCommands() },
-                null
-            )
+        commandUpdater()
+    }
+
+    companion object {
+        private val commandMap by lazy { Root.INSTANCE.server.commandMap }
+        private val knownCommands by lazy { commandMap.knownCommands }
+        private val prefix = Root.ORIGIN.lowercase()
+
+        private fun commandKeys(name: String, aliases: List<String>) =
+            (listOf(name) + aliases).flatMap { key ->
+                listOf(key, "$prefix:$key")
+            }
+
+        private fun removeCommand(command: Command) {
+            commandKeys(command.name, command.aliases).forEach { key ->
+                if (knownCommands[key] === command) {
+                    knownCommands.remove(key)
+                }
+            }
+            command.unregister(commandMap)
         }
+
+        private fun updateOnlineCommands() {
+            Root.onlinePlayers().forEach { player ->
+                player.scheduler.run(
+                    Root.INSTANCE,
+                    { player.updateCommands() },
+                    null
+                )
+            }
+        }
+
+        private fun List<String>.overlaps(other: List<String>): Boolean =
+            any { candidate ->
+                other.any { existing -> candidate.equals(existing, ignoreCase = true) }
+            }
     }
 }

@@ -7,6 +7,7 @@ import eternalScript.core.script.classloading.ScriptGenerationRegistry
 import eternalScript.core.script.classpath.ScriptClassIdentityConflictException
 import eternalScript.core.script.classpath.ScriptPluginClasspathPlugin
 import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
+import eternalScript.core.script.classpath.ownedClassLoaders
 import eternalScript.core.script.generation.GenerationRuntimeHandle
 import pluginfixtures.identity.DuplicateApi
 import net.kyori.pluginfixture.PluginOnlyApi
@@ -291,6 +292,41 @@ class ScriptGenerationClassLoaderTest {
     }
 
     @Test
+    fun `loaded plugin class is rejected after its owner is invalidated`() {
+        val className = DuplicateApi::class.java.name
+        val parent = DenyingClassLoader(
+            className,
+            DuplicateApi::class.java.classLoader
+        )
+        val defining = IsolatedClassLoader(
+            className,
+            classBytes(DuplicateApi::class.java),
+            parent
+        )
+
+        ScriptGenerationClassLoader(
+            emptyArray(),
+            parent,
+            snapshot(parent, plugin("Alpha", defining)),
+            emptySet(),
+            emptySet()
+        ).use { loader ->
+            assertSame(
+                defining.loadClass(className),
+                Class.forName(className, false, loader)
+            )
+            assertEquals(setOf("Alpha"), loader.pluginDependencies.snapshot())
+
+            loader.invalidatePlugin("Alpha")
+
+            val failure = assertFailsWith<DisabledScriptPluginClassException> {
+                loader.loadClass(className)
+            }
+            assertTrue(failure.message.orEmpty().contains("Alpha"))
+        }
+    }
+
+    @Test
     fun `forwarding provider cannot expose class from invalidated defining plugin`() {
         val bytes = classBytes(DuplicateApi::class.java)
         val parent = DenyingClassLoader(
@@ -345,7 +381,10 @@ class ScriptGenerationClassLoaderTest {
         val jar = testJar(ParentFirstGeneratedReference::class.java)
         try {
             val className = PluginOnlyApi::class.java.name
-            val parent = DenyingClassLoader(className, javaClass.classLoader)
+            val parent = DenyingClassLoader(
+                setOf(className, ParentFirstGeneratedReference::class.java.name),
+                javaClass.classLoader
+            )
             val defining = IsolatedClassLoader(
                 className,
                 classBytes(PluginOnlyApi::class.java),
@@ -404,11 +443,96 @@ class ScriptGenerationClassLoaderTest {
     }
 
     @Test
+    fun `parent first class defined by embedded plugin loader is tracked`() {
+        val className = PluginOnlyApi::class.java.name
+        val testParent = DenyingClassLoader(className, javaClass.classLoader)
+        val defining = IsolatedClassLoader(
+            className,
+            classBytes(PluginOnlyApi::class.java),
+            testParent
+        )
+        val forwardingParent = PassthroughClassLoader(defining)
+        val pluginLoader = EmbeddedDelegateClassLoader(defining, testParent)
+        val snapshot = snapshot(
+            forwardingParent,
+            plugin("EmbeddedApi", pluginLoader)
+        )
+
+        ScriptGenerationClassLoader(
+            emptyArray(),
+            forwardingParent,
+            snapshot,
+            emptySet(),
+            emptySet()
+        ).use { loader ->
+            assertSame(defining.loadClass(className), loader.loadClass(className))
+            assertEquals(setOf("EmbeddedApi"), loader.pluginDependencies.snapshot())
+        }
+    }
+
+    @Test
+    fun `embedded defining loader is rejected after its plugin is invalidated`() {
+        val className = PluginOnlyApi::class.java.name
+        val testParent = DenyingClassLoader(className, javaClass.classLoader)
+        val defining = IsolatedClassLoader(
+            className,
+            classBytes(PluginOnlyApi::class.java),
+            testParent
+        )
+        val forwardingParent = PassthroughClassLoader(defining)
+        val pluginLoader = EmbeddedDelegateClassLoader(defining, testParent)
+
+        ScriptGenerationClassLoader(
+            emptyArray(),
+            forwardingParent,
+            snapshot(forwardingParent, plugin("EmbeddedApi", pluginLoader)),
+            emptySet(),
+            emptySet()
+        ).use { loader ->
+            loader.invalidatePlugin("EmbeddedApi")
+
+            assertFailsWith<DisabledScriptPluginClassException> {
+                loader.loadClass(className)
+            }
+        }
+    }
+
+    @Test
+    fun `parent first embedded identity conflict is rejected`() {
+        val className = PluginOnlyApi::class.java.name
+        val parent = PluginOnlyApi::class.java.classLoader
+        val defining = IsolatedClassLoader(
+            className,
+            classBytes(PluginOnlyApi::class.java),
+            parent
+        )
+        val pluginLoader = EmbeddedDelegateClassLoader(defining, parent)
+
+        ScriptGenerationClassLoader(
+            emptyArray(),
+            parent,
+            snapshot(parent, plugin("EmbeddedApi", pluginLoader)),
+            emptySet(),
+            emptySet()
+        ).use { loader ->
+            val failure = assertFailsWith<ScriptClassIdentityConflictException> {
+                loader.loadClass(className)
+            }
+
+            assertTrue(failure.message.orEmpty().contains("EmbeddedApi"))
+            assertTrue(failure.message.orEmpty().contains("<runtime-parent>"))
+        }
+    }
+
+    @Test
     fun `analysis tracks parent first class delegated from plugin`() {
         val jar = testJar(ParentFirstGeneratedReference::class.java)
         try {
             val className = PluginOnlyApi::class.java.name
-            val testParent = DenyingClassLoader(className, javaClass.classLoader)
+            val testParent = DenyingClassLoader(
+                setOf(className, ParentFirstGeneratedReference::class.java.name),
+                javaClass.classLoader
+            )
             val defining = IsolatedClassLoader(
                 className,
                 classBytes(PluginOnlyApi::class.java),
@@ -525,11 +649,59 @@ class ScriptGenerationClassLoaderTest {
     }
 
     @Test
+    fun `generated class cannot shadow a runtime parent class`() {
+        val jar = testJar(DuplicateApi::class.java)
+        try {
+            val parent = DuplicateApi::class.java.classLoader
+
+            val failure = assertFailsWith<ScriptClassIdentityConflictException> {
+                ScriptClassReferenceAnalyzer.analyze(jar, snapshot(parent))
+            }
+
+            assertTrue(failure.message.orEmpty().contains(DuplicateApi::class.java.name))
+            assertTrue(failure.message.orEmpty().contains("<generated-project>"))
+            assertTrue(failure.message.orEmpty().contains("<runtime-parent>"))
+        } finally {
+            Files.deleteIfExists(jar)
+        }
+    }
+
+    @Test
+    fun `generated class cannot shadow a plugin class`() {
+        val jar = testJar(PluginOnlyApi::class.java)
+        try {
+            val className = PluginOnlyApi::class.java.name
+            val parent = DenyingClassLoader(className, javaClass.classLoader)
+            val defining = IsolatedClassLoader(
+                className,
+                classBytes(PluginOnlyApi::class.java),
+                parent
+            )
+
+            val failure = assertFailsWith<ScriptClassIdentityConflictException> {
+                ScriptClassReferenceAnalyzer.analyze(
+                    jar,
+                    snapshot(parent, plugin("PluginApi", defining))
+                )
+            }
+
+            assertTrue(failure.message.orEmpty().contains(className))
+            assertTrue(failure.message.orEmpty().contains("<generated-project>"))
+            assertTrue(failure.message.orEmpty().contains("PluginApi"))
+        } finally {
+            Files.deleteIfExists(jar)
+        }
+    }
+
+    @Test
     fun `generated jar references are rejected before evaluation on identity conflict`() {
         val jar = testJar(GeneratedReference::class.java)
         try {
             val bytes = classBytes(DuplicateApi::class.java)
-            val parent = DuplicateApi::class.java.classLoader
+            val parent = DenyingClassLoader(
+                GeneratedReference::class.java.name,
+                DuplicateApi::class.java.classLoader
+            )
             val snapshot = snapshot(
                 parent,
                 plugin("Alpha", IsolatedClassLoader(DuplicateApi::class.java.name, bytes, parent)),
@@ -553,7 +725,10 @@ class ScriptGenerationClassLoaderTest {
         try {
             val bytes = classBytes(DuplicateApi::class.java)
             val parent = DenyingClassLoader(
-                DuplicateApi::class.java.name,
+                setOf(
+                    DuplicateApi::class.java.name,
+                    GeneratedReference::class.java.name
+                ),
                 DuplicateApi::class.java.classLoader
             )
             val defining = IsolatedClassLoader(DuplicateApi::class.java.name, bytes, parent)
@@ -592,7 +767,8 @@ class ScriptGenerationClassLoaderTest {
         name = name,
         version = "1.0.0",
         files = emptyList(),
-        classLoader = classLoader
+        classLoader = classLoader,
+        ownedClassLoaders = classLoader.ownedClassLoaders()
     )
 
     private fun invalidatedEphemeralGeneration(
@@ -657,12 +833,30 @@ class ScriptGenerationClassLoaderTest {
         parent: ClassLoader
     ) : ClassLoader(parent)
 
-    private class DenyingClassLoader(
-        private val deniedName: String,
+    private class EmbeddedDelegateClassLoader(
+        @Suppress("unused")
+        private val libraryLoader: ClassLoader,
         parent: ClassLoader
     ) : ClassLoader(parent) {
+        override fun loadClass(name: String, resolve: Boolean): Class<*> =
+            try {
+                libraryLoader.loadClass(name)
+            } catch (_: ClassNotFoundException) {
+                super.loadClass(name, resolve)
+            }
+    }
+
+    private class DenyingClassLoader(
+        private val deniedNames: Set<String>,
+        parent: ClassLoader
+    ) : ClassLoader(parent) {
+        constructor(deniedName: String, parent: ClassLoader) : this(
+            setOf(deniedName),
+            parent
+        )
+
         override fun loadClass(name: String, resolve: Boolean): Class<*> {
-            if (name == deniedName) throw ClassNotFoundException(name)
+            if (name in deniedNames) throw ClassNotFoundException(name)
             return super.loadClass(name, resolve)
         }
     }

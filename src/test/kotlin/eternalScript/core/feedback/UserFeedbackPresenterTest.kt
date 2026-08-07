@@ -149,6 +149,12 @@ class UserFeedbackPresenterTest {
                 expectedKey = "feedback.next.wait"
             ),
             StatusCase(
+                name = "quarantined generation directs cleanup retry",
+                project = projectStatus(generationState = ScriptExecutionGate.State.SWAPPING),
+                workspace = workspace(),
+                expectedKey = "feedback.next.cleanup"
+            ),
+            StatusCase(
                 name = "stopping generation requires waiting",
                 project = projectStatus(generationState = ScriptExecutionGate.State.RETIRED),
                 workspace = workspace(),
@@ -328,6 +334,50 @@ class UserFeedbackPresenterTest {
     }
 
     @Test
+    fun `frozen generation reports deferred cleanup instead of preservation`() {
+        val cleanupPending = ScriptProjectLoadResult(
+            outcome = ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE,
+            previousGeneration = activeGeneration(),
+            generation = frozenGeneration(),
+            report = ScriptProjectReport()
+        )
+
+        val reload = UserFeedbackPresenter.present(ProjectReloadFinished(cleanupPending))
+        assertEquals(
+            "script.reload.cleanup_pending",
+            reload.single { it.stage == UserFeedbackStage.RESULT }.key
+        )
+        assertEquals("feedback.next.cleanup", reload.singleNextAction().key)
+
+        val rejectedUnload = UserFeedbackPresenter.present(
+            ProjectUnloadFinished(
+                result = ScriptProjectUnloadResult(
+                    outcome = ScriptProjectUnloadOutcome.REJECTED,
+                    sourceCount = 2,
+                    entryCount = 2,
+                    generation = frozenGeneration(),
+                    report = ScriptProjectReport()
+                ),
+                diskSourceCount = 2
+            )
+        )
+        assertEquals("feedback.next.cleanup", rejectedUnload.singleNextAction().key)
+
+        val startup = UserFeedbackPresenter.present(
+            StartupSummary(
+                workspace = readyWorkspace(),
+                sourceCount = 2,
+                loadResult = cleanupPending
+            )
+        )
+        assertEquals(
+            "script.reload.cleanup_pending",
+            startup.single { it.stage == UserFeedbackStage.RESULT }.key
+        )
+        assertEquals("feedback.next.cleanup", startup.singleNextAction().key)
+    }
+
+    @Test
     fun `check with no sources reports the empty project and example action`() {
         val messages = UserFeedbackPresenter.present(
             ProjectCheckFinished(
@@ -378,6 +428,12 @@ class UserFeedbackPresenterTest {
 
     private fun activeGeneration() = ScriptProjectGenerationSnapshot(
         state = ScriptExecutionGate.State.ACTIVE,
+        sourceNames = setOf("main.kt", "shared.kt"),
+        entryNames = listOf("sample.Alpha", "sample.Beta")
+    )
+
+    private fun frozenGeneration() = ScriptProjectGenerationSnapshot(
+        state = ScriptExecutionGate.State.SWAPPING,
         sourceNames = setOf("main.kt", "shared.kt"),
         entryNames = listOf("sample.Alpha", "sample.Beta")
     )

@@ -29,7 +29,8 @@ internal data class CapturedScriptPlugin(
     val name: String,
     val version: String,
     internal val classLoader: ClassLoader,
-    internal val files: List<File>
+    internal val files: List<File>,
+    internal val ownedClassLoaders: List<ClassLoader> = listOf(classLoader)
 )
 
 /**
@@ -55,6 +56,49 @@ internal class ScriptPluginClasspathSnapshot internal constructor(
     internal fun resolvePluginClass(className: String): ResolvedPluginClass? =
         PluginClassResolver(parentClassLoader, plugins, conflictLog).resolve(className)
 
+    internal fun declaredClassConflict(className: String): ScriptClassIdentityConflict? {
+        val parentType = parentClassLoader.resolvedClass(className)
+        val pluginProviders = plugins.mapNotNull { plugin ->
+            plugin.resolvedClass(className)?.let { type -> plugin to type }
+        }
+        val definingProviders = pluginProviders.filter { (plugin, type) ->
+            plugin.owns(type.classLoader)
+        }
+        val externalProviders = buildList {
+            parentType?.let { type ->
+                add(
+                    ScriptClassIdentityProvider(
+                        pluginName = "<runtime-parent>",
+                        pluginVersion = "current",
+                        classLoaderDescription = type.classLoader.description()
+                    )
+                )
+            }
+            val pluginOwners = definingProviders.ifEmpty {
+                pluginProviders.takeIf { parentType == null }.orEmpty()
+            }
+            pluginOwners.mapTo(this) { (plugin, type) ->
+                ScriptClassIdentityProvider(
+                    pluginName = plugin.name,
+                    pluginVersion = plugin.version,
+                    classLoaderDescription = type.classLoader.description()
+                )
+            }
+        }.distinct()
+        if (externalProviders.isEmpty()) return null
+
+        return ScriptClassIdentityConflict(
+            className = className,
+            providers = listOf(
+                ScriptClassIdentityProvider(
+                    pluginName = "<generated-project>",
+                    pluginVersion = "current",
+                    classLoaderDescription = "compiled generation output"
+                )
+            ) + externalProviders
+        ).also(conflictLog::record)
+    }
+
     internal fun ownerNamesForResolvedClass(
         className: String,
         type: Class<*>
@@ -67,7 +111,7 @@ internal class ScriptPluginClasspathSnapshot internal constructor(
             }
         }
         val definingOwners = providers
-            .filter { plugin -> plugin.classLoader === type.classLoader }
+            .filter { plugin -> plugin.owns(type.classLoader) }
             .mapTo(
                 sortedSetOf(String.CASE_INSENSITIVE_ORDER),
                 ScriptPluginClasspathPlugin::name
@@ -117,8 +161,15 @@ internal data class ScriptPluginClasspathPlugin(
     val name: String,
     val version: String,
     val files: List<File>,
-    internal val classLoader: ClassLoader
-)
+    internal val classLoader: ClassLoader,
+    internal val ownedClassLoaders: List<ClassLoader> = listOf(classLoader)
+) {
+    internal fun owns(loader: ClassLoader?): Boolean =
+        ownedClassLoaders.any { owned -> owned === loader }
+
+    internal fun resolvedClass(className: String): Class<*>? =
+        classLoader.resolvedClass(className)
+}
 
 internal data class ScriptClassIdentityProvider(
     val pluginName: String,
@@ -194,7 +245,8 @@ internal object ScriptPluginClasspathRegistry {
                 name = plugin.name,
                 version = plugin.pluginMeta.version,
                 classLoader = loader,
-                files = loader.ownClasspathFiles(plugin.javaClass)
+                files = loader.ownClasspathFiles(plugin.javaClass),
+                ownedClassLoaders = loader.ownedClassLoaders()
             )
         }
         return ScriptPluginClasspathCapture(
@@ -290,7 +342,8 @@ internal object ScriptPluginClasspathRegistry {
                     name = plugin.name,
                     version = plugin.version,
                     files = plugin.files.normalizedDistinct(),
-                    classLoader = plugin.classLoader
+                    classLoader = plugin.classLoader,
+                    ownedClassLoaders = plugin.ownedClassLoaders
                 )
             }
         val files = buildList {
@@ -355,7 +408,9 @@ private class PluginClassResolver(
                 val selectedType = parentType ?: providers.first().second
                 val selectedOwners = providers
                     .asSequence()
-                    .filter { (_, type) -> type.classLoader === selectedType.classLoader }
+                    .filter { (plugin, type) ->
+                        type === selectedType && plugin.owns(type.classLoader)
+                    }
                     .mapTo(sortedSetOf(String.CASE_INSENSITIVE_ORDER)) { (plugin, _) ->
                         plugin.name
                     }
@@ -390,7 +445,7 @@ private class PluginClassResolver(
         val definingOwners = providers
             .asSequence()
             .map(Pair<ScriptPluginClasspathPlugin, Class<*>>::first)
-            .filter { plugin -> plugin.classLoader === type.classLoader }
+            .filter { plugin -> plugin.owns(type.classLoader) }
             .map(ScriptPluginClasspathPlugin::name)
             .toCollection(sortedSetOf(String.CASE_INSENSITIVE_ORDER))
         if (definingOwners.isNotEmpty()) {
@@ -440,6 +495,13 @@ private fun ClassLoader?.description(): String = when (this) {
     null -> "bootstrap"
     else -> "${javaClass.name}@${Integer.toHexString(System.identityHashCode(this))}"
 }
+
+private fun ClassLoader.resolvedClass(className: String): Class<*>? =
+    try {
+        loadClass(className)
+    } catch (_: ClassNotFoundException) {
+        null
+    }
 
 private fun Iterable<File>.normalizedDistinct(): List<File> =
     map { file -> file.toPath().toAbsolutePath().normalize().toFile() }

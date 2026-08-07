@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.FileTime
 import java.security.MessageDigest
 import java.time.Duration
@@ -280,21 +281,164 @@ class KotlinIncrementalProjectCompilerTest {
         }
     }
 
+    @Test
+    fun `class only artifact cache validates every packaged output`() {
+        withCompiler { compiler ->
+            val module = ScriptProjectSource.compose(
+                listOf(
+                    ScriptProjectFile(
+                        "entry.kt",
+                        """
+                        package probe.entry
+
+                        class OnlyEntry
+                        """.trimIndent()
+                    )
+                )
+            ).module
+            val first = compiler.compile(module)
+
+            assertSuccessful(first)
+            val jar = assertNotNull(first.generationJar)
+            val entryClass = "probe/entry/OnlyEntry.class"
+            JarFile(jar.toFile(), false).use { generated ->
+                assertNotNull(generated.getJarEntry(entryClass))
+            }
+            jar.removeEntry(entryClass)
+
+            val repaired = compiler.compile(module)
+
+            assertSuccessful(repaired)
+            assertFalse(repaired.cacheHit)
+            JarFile(assertNotNull(repaired.generationJar).toFile(), false).use { generated ->
+                assertNotNull(generated.getJarEntry(entryClass))
+            }
+        }
+    }
+
+    @Test
+    fun `classpath mutation aborts snapshot and artifact publication`() {
+        listOf(
+            KotlinIncrementalProjectCompilationPhase.BEFORE_CLASSPATH_SNAPSHOTS,
+            KotlinIncrementalProjectCompilationPhase.BEFORE_CLASSPATH_REVALIDATION
+        ).forEach { mutationPhase ->
+            val mutableJar = Files.createTempFile(
+                "eternal-script-mutating-classpath",
+                ".jar"
+            )
+            try {
+                mutableJar.writeMarkerJar("before")
+                var mutated = false
+                withCompiler(
+                    extraClasspath = listOf(mutableJar),
+                    compilationObserver = { phase ->
+                        if (!mutated && phase == mutationPhase) {
+                            mutableJar.writeMarkerJar("after")
+                            mutated = true
+                        }
+                    }
+                ) { compiler ->
+                    val result = compiler.compile(module(message = mutationPhase.name))
+
+                    assertTrue(mutated)
+                    assertEquals(CompilationResult.COMPILER_INTERNAL_ERROR, result.result)
+                    assertFalse(result.cacheHit)
+                    assertNull(result.generationJar)
+                    assertTrue(
+                        result.diagnostics.any { diagnostic ->
+                            diagnostic.message.contains("classpath", ignoreCase = true) &&
+                                diagnostic.message.contains("changed", ignoreCase = true)
+                        },
+                        result.diagnostics.joinToString("\n") { diagnostic ->
+                            diagnostic.message
+                        }
+                    )
+                    assertTrue(compiler.artifactsDirectory.directFiles().isEmpty())
+                }
+            } finally {
+                Files.deleteIfExists(mutableJar)
+            }
+        }
+    }
+
+    @Test
+    fun `classpath mutation aborts an otherwise valid artifact cache hit`() {
+        val mutableJar = Files.createTempFile(
+            "eternal-script-cache-hit-classpath",
+            ".jar"
+        )
+        try {
+            mutableJar.writeMarkerJar("before")
+            var mutateCacheHit = false
+            var mutated = false
+            withCompiler(
+                extraClasspath = listOf(mutableJar),
+                compilationObserver = { phase ->
+                    if (
+                        mutateCacheHit &&
+                        !mutated &&
+                        phase == KotlinIncrementalProjectCompilationPhase
+                            .BEFORE_CACHE_HIT_REVALIDATION
+                    ) {
+                        mutableJar.writeMarkerJar("after")
+                        mutated = true
+                    }
+                }
+            ) { compiler ->
+                val module = module(message = "cache-hit")
+                val first = compiler.compile(module)
+
+                assertSuccessful(first)
+                assertFalse(first.cacheHit)
+                mutateCacheHit = true
+
+                val rejectedHit = compiler.compile(module)
+
+                assertTrue(mutated)
+                assertEquals(
+                    CompilationResult.COMPILER_INTERNAL_ERROR,
+                    rejectedHit.result
+                )
+                assertFalse(rejectedHit.cacheHit)
+                assertNull(rejectedHit.generationJar)
+                assertTrue(
+                    rejectedHit.diagnostics.any { diagnostic ->
+                        diagnostic.message.contains("classpath", ignoreCase = true) &&
+                            diagnostic.message.contains("changed", ignoreCase = true)
+                    },
+                    rejectedHit.diagnostics.joinToString("\n") { diagnostic ->
+                        diagnostic.message
+                    }
+                )
+                assertNotNull(first.generationJar).also { artifact ->
+                    assertTrue(artifact.isRegularFile())
+                }
+            }
+        } finally {
+            Files.deleteIfExists(mutableJar)
+        }
+    }
+
     private fun withCompiler(
+        extraClasspath: List<Path> = emptyList(),
+        compilationObserver: (KotlinIncrementalProjectCompilationPhase) -> Unit = {},
         block: (KotlinIncrementalProjectCompiler) -> Unit
     ) {
         val root = Files.createTempDirectory("eternal-script-incremental-test")
         try {
-            val classpath = classpathFromClassloader(javaClass.classLoader)
-                .orEmpty()
-                .map(File::toPath)
+            val classpath = (
+                classpathFromClassloader(javaClass.classLoader)
+                    .orEmpty()
+                    .map(File::toPath) + extraClasspath
+            )
                 .filter(Files::exists)
                 .distinct()
             block(
                 KotlinIncrementalProjectCompiler(
                     cacheRoot = root,
                     classpath = classpath,
-                    implementationClassLoader = javaClass.classLoader
+                    implementationClassLoader = javaClass.classLoader,
+                    compilationObserver = compilationObserver
                 )
             )
         } finally {
@@ -504,5 +648,19 @@ private fun Path.removeEntry(entryName: String) {
         Files.move(temporary, this, StandardCopyOption.REPLACE_EXISTING)
     } finally {
         Files.deleteIfExists(temporary)
+    }
+}
+
+private fun Path.writeMarkerJar(marker: String) {
+    JarOutputStream(
+        Files.newOutputStream(
+            this,
+            StandardOpenOption.TRUNCATE_EXISTING,
+            StandardOpenOption.WRITE
+        )
+    ).use { output ->
+        output.putNextEntry(JarEntry("marker.txt"))
+        output.write(marker.toByteArray())
+        output.closeEntry()
     }
 }

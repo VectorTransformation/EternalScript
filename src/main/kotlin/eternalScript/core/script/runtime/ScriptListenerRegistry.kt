@@ -6,18 +6,17 @@ import eternalScript.core.the.Root
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
-import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.reflect.KClass
 
 class ScriptListenerRegistry(
     private val executionGate: ScriptExecutionGate,
     private val registrationGate: ScriptRegistrationGate
 ) : Listener {
-    private val definitions = ConcurrentLinkedQueue<() -> Unit>()
-    private val runtimeRegistrations = ConcurrentLinkedQueue<() -> Unit>()
+    private val registrations = ScriptRegistrationLifecycle<() -> Unit>()
 
-    @Volatile
-    private var active = false
+    internal fun beginActivation() {
+        registrations.beginActivation()
+    }
 
     @PublishedApi
     internal fun <T : Event> add(
@@ -25,9 +24,6 @@ class ScriptListenerRegistry(
         priority: EventPriority,
         block: (T) -> Unit
     ) {
-        check(!active || registrationGate.isOpen) {
-            "Events can only be registered at script top level or during the enable lifecycle."
-        }
         val registration = {
             Root.register(event, this, priority) { value ->
                 executionGate.withActive {
@@ -35,34 +31,31 @@ class ScriptListenerRegistry(
                 }
             }
         }
-        if (active) {
-            runtimeRegistrations.add(registration)
+        if (
+            registrations.add(
+                registration,
+                registrationGateOpen = registrationGate.isOpen
+            ) == ScriptRegistrationLifecycle.Placement.LIVE
+        ) {
             registration()
-        } else {
-            definitions.add(registration)
         }
     }
 
     fun register() {
-        if (active) return
-        active = true
-        definitions.forEach { it() }
+        registrations.activate().forEach { it() }
     }
 
     fun unregister() {
-        if (definitions.isNotEmpty() || runtimeRegistrations.isNotEmpty()) {
+        val release = registrations.deactivate()
+        if (release.wasActive && release.registrations.isNotEmpty()) {
             Root.unregister(this)
         }
-        active = false
-        runtimeRegistrations.clear()
     }
 
     fun clear() {
-        if (active) {
-            unregister()
-        } else {
-            runtimeRegistrations.clear()
+        val release = registrations.dispose()
+        if (release.wasActive && release.registrations.isNotEmpty()) {
+            Root.unregister(this)
         }
-        definitions.clear()
     }
 }

@@ -75,6 +75,20 @@ class UserFeedbackLocaleCoverageTest {
                 )
             )
         }
+        val cleanupPending = ScriptProjectLoadResult(
+            outcome = ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE,
+            previousGeneration = generation(ScriptExecutionGate.State.ACTIVE),
+            generation = generation(ScriptExecutionGate.State.SWAPPING),
+            report = report()
+        )
+        add(UserFeedbackEvent.ProjectReloadFinished(cleanupPending))
+        add(
+            UserFeedbackEvent.StartupSummary(
+                workspace = workspaceUpdate(WorkspaceState.READY),
+                sourceCount = 2,
+                loadResult = cleanupPending
+            )
+        )
         add(UserFeedbackEvent.ProjectCheckStarted(sourceCount = 2))
         ScriptProjectCheckOutcome.entries.forEach { outcome ->
             add(

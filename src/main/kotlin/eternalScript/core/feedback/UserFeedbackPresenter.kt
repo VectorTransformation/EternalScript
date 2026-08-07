@@ -29,6 +29,7 @@ import eternalScript.core.manager.ScriptProjectState
 import eternalScript.core.operation.ScriptOperationKind
 import eternalScript.core.operation.ScriptOperationSnapshot
 import eternalScript.core.operation.ScriptOperationState
+import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.generation.GenerationDiagnosticPhase
 import eternalScript.core.script.generation.ScriptLifecycleFailurePhase
 import eternalScript.core.script.generation.ScriptProjectLoadOutcome
@@ -133,8 +134,18 @@ internal object UserFeedbackPresenter {
                 output += next("feedback.next.status")
             }
             ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE -> {
-                output += result("script.reload.failed_inactive", UserFeedbackSeverity.ERROR)
-                output += next("feedback.next.check")
+                if (result.generation.exists) {
+                    output += result(
+                        "script.reload.cleanup_pending",
+                        UserFeedbackSeverity.WARNING,
+                        result.generation.sourceNames.size,
+                        result.generation.entryNames.size
+                    )
+                    output += next("feedback.next.cleanup")
+                } else {
+                    output += result("script.reload.failed_inactive", UserFeedbackSeverity.ERROR)
+                    output += next("feedback.next.check")
+                }
             }
         }
         return output
@@ -191,6 +202,10 @@ internal object UserFeedbackPresenter {
         }
         output += next(
             when {
+                event.result.outcome == ScriptProjectUnloadOutcome.REJECTED &&
+                    event.result.generation.exists &&
+                    !event.result.generation.acceptsCallbacks ->
+                    "feedback.next.cleanup"
                 event.result.outcome == ScriptProjectUnloadOutcome.REJECTED ->
                     "feedback.next.wait"
                 event.diskSourceCount == 0 -> "feedback.next.example"
@@ -407,11 +422,22 @@ internal object UserFeedbackPresenter {
                     loadResult.generation.sourceNames.size,
                     loadResult.generation.entryNames.size
                 )
-                ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE -> output += result(
-                    "script.automatic_load.failed_inactive",
-                    UserFeedbackSeverity.ERROR,
-                    event.sourceCount
-                )
+                ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE -> {
+                    if (loadResult.generation.exists) {
+                        output += result(
+                            "script.reload.cleanup_pending",
+                            UserFeedbackSeverity.WARNING,
+                            loadResult.generation.sourceNames.size,
+                            loadResult.generation.entryNames.size
+                        )
+                    } else {
+                        output += result(
+                            "script.automatic_load.failed_inactive",
+                            UserFeedbackSeverity.ERROR,
+                            event.sourceCount
+                        )
+                    }
+                }
             }
         }
         output += next(
@@ -419,6 +445,10 @@ internal object UserFeedbackPresenter {
                 event.workspace.status.state != WorkspaceState.READY ->
                     "feedback.next.workspace_update"
                 loadResult == null -> "feedback.next.example"
+                !loadResult.activated &&
+                    loadResult.generation.exists &&
+                    !loadResult.generation.acceptsCallbacks ->
+                    "feedback.next.cleanup"
                 !loadResult.activated -> "feedback.next.check"
                 event.workspace.status.ideRefreshRecommended -> "feedback.next.ide_refresh"
                 else -> "feedback.next.edit"
@@ -495,8 +525,10 @@ internal object UserFeedbackPresenter {
         workspace: WorkspaceStatus
     ): String = when {
         project.currentUserOperation != null ||
-            project.backgroundMaintenance ||
-            project.state == ScriptProjectState.UPDATING ||
+            project.backgroundMaintenance -> "feedback.next.wait"
+        project.generation.state == ScriptExecutionGate.State.SWAPPING ->
+            "feedback.next.cleanup"
+        project.state == ScriptProjectState.UPDATING ||
             project.state == ScriptProjectState.STOPPING -> "feedback.next.wait"
         workspace.state != WorkspaceState.READY -> "feedback.next.workspace_update"
         project.automaticLoadState == AutomaticProjectLoadState.FAILED_INACTIVE ||

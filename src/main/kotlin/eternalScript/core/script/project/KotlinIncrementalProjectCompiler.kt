@@ -28,6 +28,7 @@ import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.jar.JarEntry
 import java.util.jar.JarFile
@@ -67,6 +68,12 @@ internal data class KotlinIncrementalProjectCacheCleanup(
     val failures: Map<Path, String>
 )
 
+internal enum class KotlinIncrementalProjectCompilationPhase {
+    BEFORE_CACHE_HIT_REVALIDATION,
+    BEFORE_CLASSPATH_SNAPSHOTS,
+    BEFORE_CLASSPATH_REVALIDATION
+}
+
 /**
  * Compiles generated ordinary Kotlin sources as one incrementally-built JVM
  * module and snapshots every successful output as an immutable generation JAR.
@@ -80,7 +87,8 @@ internal class KotlinIncrementalProjectCompiler(
     private val classpathIdentity: String = "",
     implementationClassLoader: ClassLoader =
         Thread.currentThread().contextClassLoader
-            ?: KotlinIncrementalProjectCompiler::class.java.classLoader
+            ?: KotlinIncrementalProjectCompiler::class.java.classLoader,
+    private val compilationObserver: (KotlinIncrementalProjectCompilationPhase) -> Unit = {}
 ) {
     private val toolchains = KotlinToolchains.loadImplementation(implementationClassLoader)
     private val jvm = toolchains.jvm
@@ -154,18 +162,30 @@ internal class KotlinIncrementalProjectCompiler(
         val artifact = artifactsDirectory.resolve("$artifactKey.jar")
 
         if (artifact.isUsableGenerationJar(module)) {
-            return KotlinIncrementalProjectCompilation(
-                result = CompilationResult.COMPILATION_SUCCESS,
-                generationJar = artifact,
-                diagnostics = emptyList(),
-                cacheHit = true
-            )
+            return try {
+                compilationObserver(
+                    KotlinIncrementalProjectCompilationPhase
+                        .BEFORE_CACHE_HIT_REVALIDATION
+                )
+                requireUnchangedClasspath(classpathState)
+                KotlinIncrementalProjectCompilation(
+                    result = CompilationResult.COMPILATION_SUCCESS,
+                    generationJar = artifact,
+                    diagnostics = emptyList(),
+                    cacheHit = true
+                )
+            } catch (exception: Exception) {
+                failed(exception)
+            }
         }
 
         return try {
             prepareDirectories()
             val sourceChanges = syncSources(module)
             val renderer = CapturingRenderer(module)
+            compilationObserver(
+                KotlinIncrementalProjectCompilationPhase.BEFORE_CLASSPATH_SNAPSHOTS
+            )
             val result = toolchains.createBuildSession().use { session ->
                 val snapshots = classpathState.entries.map { entry ->
                     entry.snapshot(session)
@@ -220,6 +240,10 @@ internal class KotlinIncrementalProjectCompiler(
                     cacheHit = false
                 )
             } else {
+                compilationObserver(
+                    KotlinIncrementalProjectCompilationPhase.BEFORE_CLASSPATH_REVALIDATION
+                )
+                requireUnchangedClasspath(classpathState)
                 persistCompiledSourceState(sourceChanges.currentState)
                 val packaged = packageGeneration(artifact, module)
                 KotlinIncrementalProjectCompilation(
@@ -469,6 +493,14 @@ internal class KotlinIncrementalProjectCompiler(
         return ClasspathState(entries, digest.digest().toHexString())
     }
 
+    private fun requireUnchangedClasspath(expected: ClasspathState) {
+        val actual = classpathState()
+        check(actual.fingerprint == expected.fingerprint) {
+            "Compilation classpath changed while the Kotlin project was being compiled. " +
+                "Try again after dependency updates finish."
+        }
+    }
+
     private fun ClasspathStateEntry.snapshot(
         session: KotlinToolchains.BuildSession
     ): Path {
@@ -487,6 +519,10 @@ internal class KotlinIncrementalProjectCompiler(
         )
         try {
             snapshot.saveSnapshot(temporary)
+            check(path.contentFingerprint() == fingerprint) {
+                "Compilation classpath entry changed while its Kotlin snapshot was " +
+                    "being created: $path"
+            }
             moveReplacing(temporary, target)
         } finally {
             Files.deleteIfExists(temporary)
@@ -512,13 +548,29 @@ internal class KotlinIncrementalProjectCompiler(
         target: Path,
         module: ScriptProjectModule
     ): Path {
-        val files = Files.walk(classesDirectory).use { paths ->
+        val contents = Files.walk(classesDirectory).use { paths ->
             paths.filter(Path::isRegularFile)
                 .sorted(compareBy { path ->
                     classesDirectory.relativize(path).invariantSeparatorsPathString
                 })
+                .map { path ->
+                    GenerationJarContent(
+                        name = classesDirectory.relativize(path)
+                            .invariantSeparatorsPathString,
+                        bytes = Files.readAllBytes(path)
+                    )
+                }
                 .toList()
         }
+        check(contents.none { content -> content.name == GENERATION_INDEX_ENTRY }) {
+            "Compiler output reserved the EternalScript generation index path."
+        }
+        val entries = (
+            contents + GenerationJarContent(
+                name = GENERATION_INDEX_ENTRY,
+                bytes = generationIndex(module, contents)
+            )
+        ).sortedBy(GenerationJarContent::name)
         val temporary = Files.createTempFile(
             artifactsDirectory,
             ".${target.fileName}.",
@@ -533,21 +585,8 @@ internal class KotlinIncrementalProjectCompiler(
                     )
                 )
             ).use { jar ->
-                files.forEach { file ->
-                    val bytes = Files.readAllBytes(file)
-                    val crc = CRC32().apply { update(bytes) }
-                    val entry = JarEntry(
-                        classesDirectory.relativize(file).invariantSeparatorsPathString
-                    ).apply {
-                        method = JarEntry.STORED
-                        size = bytes.size.toLong()
-                        compressedSize = bytes.size.toLong()
-                        this.crc = crc.value
-                        time = DETERMINISTIC_JAR_TIMESTAMP
-                    }
-                    jar.putNextEntry(entry)
-                    jar.write(bytes)
-                    jar.closeEntry()
+                entries.forEach { content ->
+                    jar.writeStoredEntry(content)
                 }
             }
             publishArtifact(temporary, target, module)
@@ -582,16 +621,99 @@ internal class KotlinIncrementalProjectCompiler(
         if (!isRegularFile() || runCatching { Files.size(this) }.getOrDefault(0L) <= 0L) {
             return false
         }
-        val requiredEntries = buildSet {
-            module.files.mapNotNullTo(this) { file ->
-                file.facadeClassName?.replace('.', '/')?.plus(".class")
-            }
-        }
         return runCatching {
             JarFile(toFile(), false).use { jar ->
-                requiredEntries.all { entry -> jar.getJarEntry(entry) != null }
+                val indexEntry = jar.getJarEntry(GENERATION_INDEX_ENTRY)
+                    ?: return@use false
+                if (indexEntry.size !in 1L..MAX_GENERATION_INDEX_BYTES) {
+                    return@use false
+                }
+                val index = jar.getInputStream(indexEntry).bufferedReader(
+                    StandardCharsets.UTF_8
+                ).use { reader ->
+                    parseGenerationIndex(reader.readLines(), module)
+                }
+                val actualNames = jar.entries().asSequence()
+                    .filterNot { entry -> entry.isDirectory }
+                    .map(JarEntry::getName)
+                    .filterNot { name -> name == GENERATION_INDEX_ENTRY }
+                    .sorted()
+                    .toList()
+                if (actualNames != index.map(GenerationJarIndexRecord::name)) {
+                    return@use false
+                }
+                index.all { record ->
+                    val entry = jar.getJarEntry(record.name) ?: return@all false
+                    if (entry.size != record.size) return@all false
+                    val digest = jar.getInputStream(entry).use { input ->
+                        val messageDigest = MessageDigest.getInstance("SHA-256")
+                        val buffer = ByteArray(HASH_BUFFER_SIZE)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            messageDigest.update(buffer, 0, count)
+                        }
+                        messageDigest.digest().toHexString()
+                    }
+                    digest == record.sha256
+                }
             }
         }.getOrDefault(false)
+    }
+
+    private fun generationIndex(
+        module: ScriptProjectModule,
+        contents: List<GenerationJarContent>
+    ): ByteArray = buildString {
+        appendLine(GENERATION_INDEX_SCHEMA)
+        appendLine(module.fingerprint)
+        contents.sortedBy(GenerationJarContent::name).forEach { content ->
+            append(content.bytes.sha256())
+            append('\t')
+            append(content.bytes.size)
+            append('\t')
+            appendLine(
+                Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    content.name.toByteArray(StandardCharsets.UTF_8)
+                )
+            )
+        }
+    }.toByteArray(StandardCharsets.UTF_8)
+
+    private fun parseGenerationIndex(
+        lines: List<String>,
+        module: ScriptProjectModule
+    ): List<GenerationJarIndexRecord> {
+        check(lines.size >= 2 && lines[0] == GENERATION_INDEX_SCHEMA)
+        check(lines[1] == module.fingerprint)
+        val records = lines.drop(2).map { line ->
+            val fields = line.split('\t', limit = 3)
+            check(fields.size == 3)
+            val sha256 = fields[0]
+            check(SHA256_HEX.matches(sha256))
+            val size = fields[1].toLong()
+            check(size >= 0L)
+            val name = Base64.getUrlDecoder().decode(fields[2])
+                .toString(StandardCharsets.UTF_8)
+            check(name.isNotEmpty() && name != GENERATION_INDEX_ENTRY)
+            GenerationJarIndexRecord(name, size, sha256)
+        }.sortedBy(GenerationJarIndexRecord::name)
+        check(records.map(GenerationJarIndexRecord::name).distinct().size == records.size)
+        return records
+    }
+
+    private fun JarOutputStream.writeStoredEntry(content: GenerationJarContent) {
+        val crc = CRC32().apply { update(content.bytes) }
+        val entry = JarEntry(content.name).apply {
+            method = JarEntry.STORED
+            size = content.bytes.size.toLong()
+            compressedSize = content.bytes.size.toLong()
+            this.crc = crc.value
+            time = DETERMINISTIC_JAR_TIMESTAMP
+        }
+        putNextEntry(entry)
+        write(content.bytes)
+        closeEntry()
     }
 
     private fun Path.contentFingerprint(): String {
@@ -720,16 +842,33 @@ internal class KotlinIncrementalProjectCompiler(
         }
     }
 
+    private data class GenerationJarContent(
+        val name: String,
+        val bytes: ByteArray
+    )
+
+    private data class GenerationJarIndexRecord(
+        val name: String,
+        val size: Long,
+        val sha256: String
+    )
+
     private companion object {
         private const val CACHE_NAMESPACE = "kotlin-incremental-v1"
-        private const val CACHE_SCHEMA = "eternal-script-kotlin-incremental-v1"
+        private const val CACHE_SCHEMA = "eternal-script-kotlin-incremental-v2"
         private const val MODULE_NAME = "eternal-script-project"
         private const val DETERMINISTIC_JAR_TIMESTAMP = 0L
         private const val SOURCE_STATE_SCHEMA = "eternal-script-compiled-sources-v2"
+        private const val GENERATION_INDEX_ENTRY =
+            "META-INF/eternalscript-generation-index.tsv"
+        private const val GENERATION_INDEX_SCHEMA =
+            "eternal-script-generation-index-v1"
+        private const val MAX_GENERATION_INDEX_BYTES = 16L * 1024L * 1024L
         private const val UNCOMPILED_SOURCE = "<uncompiled>"
         private const val DEFAULT_MAX_GENERATION_JARS = 32
         private const val DEFAULT_MAX_CLASSPATH_SNAPSHOTS = 256
         private val DEFAULT_CACHE_MAX_AGE: Duration = Duration.ofDays(30)
+        private val SHA256_HEX = Regex("[0-9a-f]{64}")
 
         private val QUIET_LOGGER = object : KotlinLogger {
             override val isDebugEnabled = false
@@ -759,6 +898,11 @@ private fun String.sourceFileName(): String =
 private fun String.sha256(): String =
     MessageDigest.getInstance("SHA-256")
         .digest(toByteArray(StandardCharsets.UTF_8))
+        .toHexString()
+
+private fun ByteArray.sha256(): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(this)
         .toHexString()
 
 private fun Int.isPositive(): Boolean = this > 0

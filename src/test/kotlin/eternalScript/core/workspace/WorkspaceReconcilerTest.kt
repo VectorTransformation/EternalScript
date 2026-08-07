@@ -217,6 +217,9 @@ class WorkspaceReconcilerTest {
         val build = catalog.managed.single {
             it.target == "build.gradle.kts"
         }.content.toString(StandardCharsets.UTF_8)
+        val workspaceGuide = catalog.managed.single {
+            it.target == "WORKSPACE.md"
+        }.content.toString(StandardCharsets.UTF_8)
         val unixLauncher = catalog.managed.single {
             it.target == "gradlew"
         }
@@ -232,7 +235,10 @@ class WorkspaceReconcilerTest {
         assertContains(build, "kotlin.include(\"**/*.kt\")")
         assertContains(build, "part.startsWith(\"-\")")
         assertContains(build, "ScriptProjectCheckTool")
+        assertContains(build, "without server classloader checks")
         assertContains(build, "dependsOn(checkScripts)")
+        assertContains(workspaceGuide, "compile-only")
+        assertContains(workspaceGuide, "Run `/es check`")
         assertTrue(unixLauncher.executable)
         assertTrue(unixLauncher.content.toString(StandardCharsets.UTF_8).startsWith("#!/bin/sh"))
     }

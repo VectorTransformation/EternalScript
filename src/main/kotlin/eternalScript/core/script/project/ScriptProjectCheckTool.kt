@@ -9,8 +9,9 @@ import kotlin.io.path.isRegularFile
 import kotlin.system.exitProcess
 
 /**
- * Build-time verifier for workspace, bundled runtime, and ignored example
- * projects. It uses the same ordinary Kotlin module backend as the runtime.
+ * Compile-only verifier for workspace, bundled runtime, and ignored example
+ * projects. It uses the same ordinary Kotlin module backend as the runtime,
+ * but cannot reproduce the server's live plugin classloader identity checks.
  */
 object ScriptProjectCheckTool {
     @JvmStatic
@@ -109,9 +110,11 @@ internal object ScriptProjectCheckCliPresenter {
                 "Next: copy scripts/-examples/hello.kt to scripts/hello.kt, then run gradle checkScripts again."
             )
             ScriptProjectCheckOutcome.PASSED -> listOf(
-                "PASSED EternalScript project | sources=${summary.sourceCount} | " +
+                "PASSED EternalScript compilation (compile-only) | " +
+                    "sources=${summary.sourceCount} | " +
                     "diagnostics=${summary.diagnosticCount}",
-                "Next: run /es reload on the server to activate this project."
+                "Next: run /es check on the server to validate plugin classloaders " +
+                    "before /es reload."
             )
             ScriptProjectCheckOutcome.FAILED -> listOf(
                 "FAILED EternalScript project | sources=${summary.sourceCount} | " +
@@ -121,7 +124,7 @@ internal object ScriptProjectCheckCliPresenter {
         }
 }
 
-private enum class ScriptProjectCheckMode {
+internal enum class ScriptProjectCheckMode {
     RUNTIME,
     IGNORED,
     ALL
@@ -132,10 +135,14 @@ private enum class ScriptProjectEmptyPolicy {
     ALLOW_EMPTY
 }
 
-private fun Path.projectFiles(
+internal fun Path.projectFiles(
     mode: ScriptProjectCheckMode
-): List<ScriptProjectFile> =
-    Files.walk(this).use { paths ->
+): List<ScriptProjectFile> {
+    if (!Files.exists(this)) return emptyList()
+    require(Files.isDirectory(this)) {
+        "Script source root is not a directory: $this"
+    }
+    return Files.walk(this).use { paths ->
         paths
             .filter(Path::isRegularFile)
             .filter { path ->
@@ -160,3 +167,4 @@ private fun Path.projectFiles(
             }
             .toList()
     }
+}

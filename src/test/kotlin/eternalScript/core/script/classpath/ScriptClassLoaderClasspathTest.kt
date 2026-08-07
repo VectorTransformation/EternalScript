@@ -19,6 +19,7 @@ class ScriptClassLoaderClasspathTest {
             URLClassLoader(arrayOf(library.toUri().toURL()), null).use { delegate ->
                 val loader = EmbeddedDelegateClassLoader(delegate)
 
+                assertEquals(listOf(loader, delegate), loader.ownedClassLoaders())
                 assertEquals(
                     listOf(library.toAbsolutePath().normalize().toFile()),
                     loader.embeddedClasspathFiles()

@@ -20,6 +20,8 @@ internal class ScriptInstanceRuntime(
                 // Mark the lifecycle active before invoking user code so a
                 // failed enable still owns exactly one reverse-order cleanup.
                 script.taskScope.open()
+                script.listenerRegistry.beginActivation()
+                script.commandRegistry.beginActivation()
                 script.registrationGate.withOpen {
                     script.lifecycleRegistry.call(script, ScriptLifecycle.ENABLE)
                 }

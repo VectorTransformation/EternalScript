@@ -1,5 +1,6 @@
 package eternalScript.core.script.generation
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -66,5 +67,27 @@ class GenerationCoordinatorStateTest {
         assertTrue(registry.transfer(generation))
         assertEquals(listOf(generation), registry.claimAll())
         assertFalse(registry.claim(generation))
+    }
+
+    @Test
+    fun `candidate cleanup runs when frozen replacement declines deactivation`() = runBlocking {
+        val ownership = GenerationOwnershipRegistry<Any>()
+        val candidate = Any()
+        var cleanups = 0
+        assertTrue(ownership.transfer(candidate))
+
+        val replaced = withOwnershipCleanup(
+            cleanup = {
+                if (ownership.claim(candidate)) {
+                    cleanups += 1
+                }
+            }
+        ) {
+            false
+        }
+
+        assertFalse(replaced)
+        assertEquals(1, cleanups)
+        assertFalse(ownership.claim(candidate))
     }
 }

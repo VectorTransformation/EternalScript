@@ -28,6 +28,7 @@ internal class ScriptGenerationClassLoader(
     override fun loadClass(name: String, resolve: Boolean): Class<*> =
         synchronized(getClassLoadingLock(name)) {
             findLoadedClass(name)?.let { loaded ->
+                rejectInvalidatedPluginClass(name, loaded)
                 if (resolve) resolveClass(loaded)
                 return@synchronized loaded
             }
@@ -41,6 +42,16 @@ internal class ScriptGenerationClassLoader(
             loaded
         }
 
+    private fun rejectInvalidatedPluginClass(name: String, type: Class<*>) {
+        val disabledDefiners = invalidatedPlugins.values
+            .filter { plugin -> plugin.owns(type.classLoader) }
+            .map(InvalidatedPlugin::name)
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+        if (disabledDefiners.isNotEmpty()) {
+            throw DisabledScriptPluginClassException(name, disabledDefiners)
+        }
+    }
+
     private fun loadParentFirst(name: String): Class<*> {
         val parentType = try {
             parent.loadClass(name)
@@ -48,19 +59,11 @@ internal class ScriptGenerationClassLoader(
             null
         }
         if (parentType != null) {
-            val disabledDefiners = invalidatedPlugins.values
-                .filter { plugin -> plugin.classLoader.get() === parentType.classLoader }
-                .map(InvalidatedPlugin::name)
-                .sortedWith(String.CASE_INSENSITIVE_ORDER)
-            if (disabledDefiners.isNotEmpty()) {
-                throw DisabledScriptPluginClassException(name, disabledDefiners)
-            }
+            rejectInvalidatedPluginClass(name, parentType)
             val snapshot = activeClasspathSnapshot.get()
             val owners = snapshot.ownerNamesForResolvedClass(name, parentType)
-            if (owners.isNotEmpty()) {
-                snapshot.resolvePluginClass(name)
-                pluginDependencies.addAll(owners)
-            }
+            snapshot.resolvePluginClass(name)
+            pluginDependencies.addAll(owners)
             return parentType
         }
         // A plugin or configured library can provide an optional class beneath
@@ -111,15 +114,7 @@ internal class ScriptGenerationClassLoader(
     private fun loadPluginLibraryOrParent(name: String): Class<*> =
         synchronized(pluginResolutionMonitor) {
             activeClasspathSnapshot.get().resolvePluginClass(name)?.let { resolved ->
-                val disabledDefiners = invalidatedPlugins.values
-                    .filter { plugin ->
-                        plugin.classLoader.get() === resolved.type.classLoader
-                    }
-                    .map(InvalidatedPlugin::name)
-                    .sortedWith(String.CASE_INSENSITIVE_ORDER)
-                if (disabledDefiners.isNotEmpty()) {
-                    throw DisabledScriptPluginClassException(name, disabledDefiners)
-                }
+                rejectInvalidatedPluginClass(name, resolved.type)
                 pluginDependencies.addAll(resolved.ownerNames)
                 return@synchronized resolved.type
             }
@@ -130,13 +125,7 @@ internal class ScriptGenerationClassLoader(
                 null
             }
             if (parentType != null) {
-                val disabledProviders = invalidatedPlugins.values
-                    .filter { plugin -> plugin.classLoader.get() === parentType.classLoader }
-                    .map(InvalidatedPlugin::name)
-                    .sortedWith(String.CASE_INSENSITIVE_ORDER)
-                if (disabledProviders.isNotEmpty()) {
-                    throw DisabledScriptPluginClassException(name, disabledProviders)
-                }
+                rejectInvalidatedPluginClass(name, parentType)
                 return@synchronized parentType
             }
             // Fall through to configured libraries after the core parent.
@@ -150,7 +139,10 @@ internal class ScriptGenerationClassLoader(
                 .filter { plugin -> plugin.name.equals(pluginName, ignoreCase = true) }
                 .forEach { plugin ->
                     invalidatedPlugins[plugin.name.lowercase(Locale.ROOT)] =
-                        InvalidatedPlugin(plugin.name, WeakReference(plugin.classLoader))
+                        InvalidatedPlugin(
+                            plugin.name,
+                            plugin.ownedClassLoaders.map { loader -> WeakReference(loader) }
+                        )
                 }
             activeClasspathSnapshot.set(snapshot.withoutPlugin(pluginName))
         }
@@ -171,8 +163,11 @@ private fun java.util.Enumeration<URL>.toList(destination: MutableSet<URL>) {
 
 private data class InvalidatedPlugin(
     val name: String,
-    val classLoader: WeakReference<ClassLoader>
-)
+    val classLoaders: List<WeakReference<ClassLoader>>
+) {
+    fun owns(loader: ClassLoader?): Boolean =
+        classLoaders.any { reference -> reference.get() === loader }
+}
 
 internal class DisabledScriptPluginClassException(
     className: String,

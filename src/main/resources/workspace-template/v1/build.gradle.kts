@@ -56,7 +56,7 @@ tasks.withType<KotlinCompile>().configureEach {
 val checkScripts = tasks.register<JavaExec>("checkScripts") {
     group = "verification"
     description =
-        "Checks scripts with EternalScript's runtime project compiler without evaluating them."
+        "Compiles scripts with EternalScript's project compiler without server classloader checks."
     classpath = files(runtimeClasspathEntries)
     mainClass.set("eternalScript.core.script.project.ScriptProjectCheckTool")
     args(

@@ -115,14 +115,12 @@ internal class ScriptGenerationCoordinator {
         val activated = loadTransaction(project, expected, report)
         val current = active.get()
         val generation = activeView.snapshot()
-        val outcome = when {
-            activated -> ScriptProjectLoadOutcome.ACTIVATED
-            expected != null && current === expected && generation.exists ->
-                ScriptProjectLoadOutcome.REJECTED_PREVIOUS_ACTIVE
-            current != null && generation.exists ->
-                ScriptProjectLoadOutcome.REJECTED_ACTIVE_CHANGED
-            else -> ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE
-        }
+        val outcome = resolveScriptProjectLoadOutcome(
+            activated = activated,
+            expected = expected,
+            current = current,
+            generation = generation
+        )
         return ScriptProjectLoadResult(
             outcome = outcome,
             previousGeneration = previousGeneration,
@@ -137,6 +135,7 @@ internal class ScriptGenerationCoordinator {
         report: MutableScriptProjectReport
     ): Boolean {
         val epoch = openEpoch() ?: return false
+        if (expected != null && !expected.runtime.isActive) return false
         val environment = environmentFence.snapshot()
         val compilation = compile(project)
         val compiled = compilation.valueOrNull()
@@ -286,20 +285,24 @@ internal class ScriptGenerationCoordinator {
     ): Boolean {
         var ownsReplacement = true
         var ownsFrozenCurrent = false
+        var trackedWorkCancellationStarted = false
         try {
             if (!canCommit(epoch, environment) || !freeze(current, epoch)) {
                 return false
             }
             ownsFrozenCurrent = true
 
+            trackedWorkCancellationStarted = true
             val trackedWorkDrained = current.runtime.cancelTrackedWorkAndJoin(
                 TRACKED_WORK_DRAIN_TIMEOUT_MILLIS
             )
             if (!trackedWorkDrained) {
                 Root.INSTANCE.logger.warning(
                     "Tracked script work did not stop within ${TRACKED_WORK_DRAIN_TIMEOUT_MILLIS}ms; " +
-                        "the generation replacement was aborted."
+                        "the generation replacement was aborted. Cleanup is deferred with new " +
+                        "script entries blocked because cancelled work cannot be restored."
                 )
+                ownsFrozenCurrent = false
                 return false
             }
 
@@ -331,7 +334,10 @@ internal class ScriptGenerationCoordinator {
                 active.get() === current &&
                 current !in invalidatedGenerations
             ) {
-                current.runtime.restore()
+                when (frozenGenerationAbortAction(trackedWorkCancellationStarted)) {
+                    FrozenGenerationAbortAction.RESTORE -> current.runtime.restore()
+                    FrozenGenerationAbortAction.KEEP_FROZEN -> Unit
+                }
             }
         }
     }
@@ -376,6 +382,29 @@ internal class ScriptGenerationCoordinator {
     }
 
     private suspend fun replaceFrozen(
+        current: ManagedProjectGeneration,
+        replacement: ManagedProjectGeneration,
+        epoch: Long,
+        environment: Long,
+        report: MutableScriptProjectReport
+    ): Boolean = withOwnershipCleanup(
+        cleanup = {
+            Root.global {
+                discard(replacement, report)
+            }
+        }
+    ) {
+        replaceFrozenTransaction(
+            current,
+            replacement,
+            epoch,
+            environment,
+            report
+        )
+    }
+
+    /** Every exit consumes or discards the staged candidate ownership. */
+    private suspend fun replaceFrozenTransaction(
         current: ManagedProjectGeneration,
         replacement: ManagedProjectGeneration,
         epoch: Long,
@@ -692,18 +721,27 @@ internal class ScriptGenerationCoordinator {
         val epoch = openEpoch() ?: return null
         val current = active.get() ?: return 0
         var ownsFrozenCurrent = false
+        var trackedWorkCancellationStarted = false
         try {
-            if (!freeze(current, epoch)) return null
+            val frozen = when (clearPreparation(current.runtime.state)) {
+                FrozenGenerationClearPreparation.FREEZE -> freeze(current, epoch)
+                FrozenGenerationClearPreparation.RETRY_DRAIN ->
+                    awaitDrain(current.runtime, GENERATION_FREEZE_ATTEMPTS)
+                FrozenGenerationClearPreparation.REJECT -> false
+            }
+            if (!frozen) return null
             ownsFrozenCurrent = true
 
+            trackedWorkCancellationStarted = true
             val trackedWorkDrained = current.runtime.cancelTrackedWorkAndJoin(
                 TRACKED_WORK_DRAIN_TIMEOUT_MILLIS
             )
             if (!trackedWorkDrained) {
                 Root.INSTANCE.logger.warning(
                     "Tracked script work did not stop within ${TRACKED_WORK_DRAIN_TIMEOUT_MILLIS}ms; " +
-                        "the generation unload was aborted."
+                        "the generation remains blocked and cleanup is deferred."
                 )
+                ownsFrozenCurrent = false
                 return null
             }
 
@@ -720,7 +758,10 @@ internal class ScriptGenerationCoordinator {
                 active.get() === current &&
                 current !in invalidatedGenerations
             ) {
-                current.runtime.restore()
+                when (frozenGenerationAbortAction(trackedWorkCancellationStarted)) {
+                    FrozenGenerationAbortAction.RESTORE -> current.runtime.restore()
+                    FrozenGenerationAbortAction.KEEP_FROZEN -> Unit
+                }
             }
         }
     }
@@ -824,3 +865,58 @@ private const val GENERATION_SHUTDOWN_DRAIN_ATTEMPTS = 1_000
 private const val GENERATION_FREEZE_RETRY_MILLIS = 10L
 private const val TRACKED_WORK_DRAIN_TIMEOUT_MILLIS = 2_000L
 private const val TRACKED_WORK_SHUTDOWN_TIMEOUT_MILLIS = 10_000L
+
+internal enum class FrozenGenerationAbortAction {
+    RESTORE,
+    KEEP_FROZEN
+}
+
+/** Cancellation is destructive: a frozen generation may only reopen before it starts. */
+internal fun frozenGenerationAbortAction(
+    trackedWorkCancellationStarted: Boolean
+): FrozenGenerationAbortAction =
+    if (trackedWorkCancellationStarted) {
+        FrozenGenerationAbortAction.KEEP_FROZEN
+    } else {
+        FrozenGenerationAbortAction.RESTORE
+    }
+
+internal enum class FrozenGenerationClearPreparation {
+    FREEZE,
+    RETRY_DRAIN,
+    REJECT
+}
+
+internal fun clearPreparation(
+    state: ScriptExecutionGate.State
+): FrozenGenerationClearPreparation =
+    when (state) {
+        ScriptExecutionGate.State.ACTIVE -> FrozenGenerationClearPreparation.FREEZE
+        ScriptExecutionGate.State.SWAPPING -> FrozenGenerationClearPreparation.RETRY_DRAIN
+        ScriptExecutionGate.State.STAGED,
+        ScriptExecutionGate.State.RETIRED -> FrozenGenerationClearPreparation.REJECT
+    }
+
+internal fun <T : Any> resolveScriptProjectLoadOutcome(
+    activated: Boolean,
+    expected: T?,
+    current: T?,
+    generation: ScriptProjectGenerationSnapshot
+): ScriptProjectLoadOutcome =
+    when {
+        activated -> ScriptProjectLoadOutcome.ACTIVATED
+        expected != null && current === expected && generation.acceptsCallbacks ->
+            ScriptProjectLoadOutcome.REJECTED_PREVIOUS_ACTIVE
+        current != null && generation.acceptsCallbacks ->
+            ScriptProjectLoadOutcome.REJECTED_ACTIVE_CHANGED
+        else -> ScriptProjectLoadOutcome.REJECTED_NO_ACTIVE
+    }
+
+internal suspend fun <T> withOwnershipCleanup(
+    cleanup: suspend () -> Unit,
+    block: suspend () -> T
+): T = try {
+    block()
+} finally {
+    cleanup()
+}
