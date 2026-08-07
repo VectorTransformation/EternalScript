@@ -6,14 +6,18 @@ import org.bukkit.Bukkit
 
 class CommandExample : EternalScript() {
     override fun onEnable() {
-        command("test-command") {
-            aliases("t1", "t2")
-            permission(null)
-            tabCompleter { _, _, _ -> emptyList() }
-            executor { sender, _, _ ->
-                Bukkit.getServer().broadcast(
-                    Component.text("sender: ${sender.name}")
-                )
+        commands {
+            command("test-command") {
+                aliases("t1", "t2")
+                permission(null)
+                suggests { emptyList() }
+                executes {
+                    Bukkit.getServer().broadcast(
+                        Component.text(
+                            "sender: ${sender.name}, arguments: $arguments"
+                        )
+                    )
+                }
             }
         }
     }

@@ -10,7 +10,13 @@ class PublicScriptApiContractTest {
         assertNotNull(Class.forName("eternalScript.api.script.EternalScript"))
         assertNotNull(Class.forName("eternalScript.api.script.EternalScriptRuntimeBridge"))
         assertNotNull(Class.forName("eternalScript.api.script.EternalScriptRuntimeAccess"))
+        assertNotNull(Class.forName("eternalScript.api.script.EternalScriptDsl"))
+        assertNotNull(Class.forName("eternalScript.api.script.ScriptEvents"))
         assertNotNull(Class.forName("eternalScript.api.script.command.ScriptCommandBuilder"))
+        assertNotNull(Class.forName("eternalScript.api.script.command.ScriptCommandContext"))
+        assertNotNull(Class.forName("eternalScript.api.script.command.ScriptCommandDefinition"))
+        assertNotNull(Class.forName("eternalScript.api.script.command.ScriptCommands"))
+        assertNotNull(Class.forName("eternalScript.api.script.command.ScriptSuggestionContext"))
 
         assertFailsWith<ClassNotFoundException> {
             Class.forName("eternalScript.api.script.Script")

@@ -1,13 +1,11 @@
 package eternalScript.api.script
 
-import eternalScript.api.script.command.ScriptCommandBuilder
+import eternalScript.api.script.command.ScriptCommands
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import org.bukkit.event.Event
-import org.bukkit.event.EventPriority
 import org.bukkit.plugin.Plugin
 import org.bukkit.scheduler.BukkitTask
 import java.util.function.Consumer
@@ -36,15 +34,14 @@ abstract class EternalScript protected constructor() {
 
     protected open fun onDisable() {}
 
-    inline fun <reified T : Event> event(
-        priority: EventPriority = EventPriority.NORMAL,
-        noinline block: (T) -> Unit
-    ) {
-        runtimeForInline().event(T::class, priority, block)
+    fun events(block: ScriptEvents.() -> Unit) {
+        runtime()
+        ScriptEvents(this).block()
     }
 
-    fun command(name: String, block: ScriptCommandBuilder.() -> Unit) {
-        runtime().command(ScriptCommandBuilder(name).apply(block))
+    fun commands(block: ScriptCommands.() -> Unit) {
+        runtime()
+        ScriptCommands(this).block()
     }
 
     fun <T : Job> track(job: T): T = runtime().track(job)
@@ -68,7 +65,7 @@ abstract class EternalScript protected constructor() {
     ): Deferred<T> = runtime().async(context, block)
 
     @PublishedApi
-    internal fun runtimeForInline(): EternalScriptRuntimeBridge = runtime()
+    internal fun runtimeForDsl(): EternalScriptRuntimeBridge = runtime()
 
     internal fun attachRuntime(bridge: EternalScriptRuntimeBridge) {
         synchronized(runtimeLock) {
@@ -98,7 +95,7 @@ abstract class EternalScript protected constructor() {
         runtimeBridge ?: when (runtimeState) {
             RuntimeState.CONSTRUCTING -> error(
                 "EternalScript APIs are unavailable during construction. " +
-                    "Move plugin, event, command, task, launch, and async calls to onEnable()."
+                    "Move plugin, events, commands, task, launch, and async calls to onEnable()."
             )
             RuntimeState.ATTACHED -> error("The EternalScript runtime bridge is unavailable.")
             RuntimeState.DISPOSED -> error(

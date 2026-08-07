@@ -11,10 +11,12 @@ class WorkspaceHello : EternalScript() {
             Component.text("Hello from the EternalScript workspace!")
         )
 
-        event<PlayerJoinEvent> { event ->
-            Bukkit.getServer().broadcast(
-                Component.text(joinMessage(event.player.name))
-            )
+        events {
+            on<PlayerJoinEvent> { event ->
+                Bukkit.getServer().broadcast(
+                    Component.text(joinMessage(event.player.name))
+                )
+            }
         }
     }
 }

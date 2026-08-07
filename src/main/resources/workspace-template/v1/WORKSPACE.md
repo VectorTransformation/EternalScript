@@ -43,13 +43,15 @@ inherit the removed `Script` type or import implementation classes from
 
 The runtime bridge is connected after the no-argument constructor completes
 and immediately before `onEnable`. Therefore constructor access to `plugin`,
-`event`, `command`, `track`, `task`, `launch`, or `async` is rejected. Put event
-and command registration in `onEnable`; EternalScript recreates those
+`events`, `commands`, `track`, `task`, `launch`, or `async` is rejected. Put
+event and command registration in `onEnable`; EternalScript recreates those
 definitions on every activation and rejects API use after final disposal.
 
-The command DSL normally needs no builder import. Code that explicitly names
-the type must import
-`eternalScript.api.script.command.ScriptCommandBuilder`.
+Use `events { on<Event> { ... } }` for listeners. Use
+`commands { command("name") { ... } }` for commands, with `suggests {}` and
+`executes {}` callbacks. Command callbacks receive `sender`, `label` or
+`alias`, and `arguments` through their context receiver; no builder import is
+required.
 
 ## Dependencies and workspace maintenance
 

@@ -7,12 +7,14 @@ import org.bukkit.event.player.PlayerQuitEvent
 
 class EventExample : EternalScript() {
     override fun onEnable() {
-        event<PlayerJoinEvent> { event ->
-            Bukkit.getServer().broadcast(joinMessage(event.player.name))
-        }
+        events {
+            on<PlayerJoinEvent> { event ->
+                Bukkit.getServer().broadcast(joinMessage(event.player.name))
+            }
 
-        event<PlayerQuitEvent> { event ->
-            Bukkit.getServer().broadcast(quitMessage(event.player.name))
+            on<PlayerQuitEvent> { event ->
+                Bukkit.getServer().broadcast(quitMessage(event.player.name))
+            }
         }
     }
 }

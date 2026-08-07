@@ -1,6 +1,6 @@
 package eternalScript.api.script
 
-import eternalScript.api.script.command.ScriptCommandBuilder
+import eternalScript.api.script.command.ScriptCommandDefinition
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -24,7 +24,7 @@ interface EternalScriptRuntimeBridge {
         block: (T) -> Unit
     )
 
-    fun command(builder: ScriptCommandBuilder)
+    fun command(definition: ScriptCommandDefinition)
 
     fun <T : Job> track(job: T): T
 

@@ -56,8 +56,10 @@ class Hello : EternalScript() {
     override fun onEnable() {
         Bukkit.getServer().broadcast(Component.text("Hello, world!"))
 
-        event<PlayerJoinEvent> { event ->
-            event.player.sendMessage("Welcome, ${event.player.name}")
+        events {
+            on<PlayerJoinEvent> { event ->
+                event.player.sendMessage("Welcome, ${event.player.name}")
+            }
         }
     }
 }
@@ -93,8 +95,8 @@ not use entry annotations or script-specific import directives.
 For projects created against an older source boundary, follow the
 [2.0 API migration guide](MIGRATION.md). There is no deprecated compatibility
 layer: extend `EternalScript` directly, move every API registration out of the
-constructor and into `onEnable`, and import command builder types only from
-`eternalScript.api.script.command`.
+constructor and into `onEnable`, then define listeners under `events {}` and
+commands under `commands {}`.
 
 Source discovery rules are deliberately simple:
 

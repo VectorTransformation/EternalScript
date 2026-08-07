@@ -1,13 +1,15 @@
 package eternalScript.core.script.runtime
 
+import eternalScript.api.script.InternalEternalScriptRuntimeApi
+import eternalScript.api.script.command.ScriptCommandDefinition
 import eternalScript.core.script.command.ScriptCommand
-import eternalScript.api.script.command.ScriptCommandBuilder
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
 import eternalScript.core.runtime.PLUGIN_NAME
 import eternalScript.core.runtime.ServerAccess
 import org.bukkit.command.Command
 
+@OptIn(InternalEternalScriptRuntimeApi::class)
 internal class ScriptCommandRegistry(
     private val executionGate: ScriptExecutionGate,
     private val registrationGate: ScriptRegistrationGate,
@@ -35,17 +37,17 @@ internal class ScriptCommandRegistry(
         registrations.beginActivation()
     }
 
-    fun addCommand(builder: ScriptCommandBuilder) {
-        val commandKeys = scriptCommandKeys(builder.name, builder.aliases)
+    fun addCommand(definition: ScriptCommandDefinition) {
+        val commandKeys = scriptCommandKeys(definition.name, definition.aliases)
         check(
             commands().none { command ->
                 commandKeys.overlaps(scriptCommandKeys(command.name, command.aliases))
             }
         ) {
-            "Command ${builder.name} conflicts with another command in the " +
+            "Command ${definition.name} conflicts with another command in the " +
                 "same EternalScript entry."
         }
-        val command = ScriptCommand(builder, executionGate)
+        val command = ScriptCommand(definition, executionGate)
         if (
             registrations.add(
                 command,

@@ -1,17 +1,21 @@
 package eternalScript.core.script.command
 
-import eternalScript.api.script.command.ScriptCommandBuilder
+import eternalScript.api.script.InternalEternalScriptRuntimeApi
+import eternalScript.api.script.command.ScriptCommandContext
+import eternalScript.api.script.command.ScriptCommandDefinition
+import eternalScript.api.script.command.ScriptSuggestionContext
 import eternalScript.core.script.data.ScriptExecutionGate
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 
+@OptIn(InternalEternalScriptRuntimeApi::class)
 class ScriptCommand(
-    val builder: ScriptCommandBuilder,
+    val definition: ScriptCommandDefinition,
     private val executionGate: ScriptExecutionGate
-) : Command(builder.name) {
+) : Command(definition.name) {
     init {
-        aliases = builder.aliases
-        permission = builder.permission
+        aliases = definition.aliases
+        permission = definition.permission
     }
 
     override fun tabComplete(
@@ -19,7 +23,9 @@ class ScriptCommand(
         alias: String,
         args: Array<String>
     ) = executionGate.withActive {
-        builder.tabCompleter(sender, alias, args.toList())
+        definition.suggest(
+            ScriptSuggestionContext(sender, alias, args.toList())
+        )
     } ?: emptyList()
 
     override fun execute(
@@ -28,7 +34,9 @@ class ScriptCommand(
         args: Array<String>
     ) = executionGate.withActive {
         if (testPermissionSilent(sender)) {
-            builder.executor(sender, label, args.toList())
+            definition.execute(
+                ScriptCommandContext(sender, label, args.toList())
+            )
             true
         } else {
             false

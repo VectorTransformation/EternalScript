@@ -1,7 +1,8 @@
 package eternalScript.core.script.runtime
 
+import eternalScript.api.script.InternalEternalScriptRuntimeApi
+import eternalScript.api.script.command.ScriptCommandDefinition
 import eternalScript.core.script.command.ScriptCommand
-import eternalScript.api.script.command.ScriptCommandBuilder
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
 import org.bukkit.command.Command
@@ -10,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
+@OptIn(InternalEternalScriptRuntimeApi::class)
 class ScriptCommandRegistryTest {
     @Test
     fun `rollback rebuilds activation commands without duplicating definitions`() {
@@ -24,7 +26,7 @@ class ScriptCommandRegistryTest {
         )
         registry.beginActivation()
         gate.withOpen {
-            registry.addCommand(ScriptCommandBuilder("cycle"))
+            registry.addCommand(command("cycle"))
         }
         registry.register()
         assertEquals(listOf("cycle"), registered)
@@ -33,7 +35,7 @@ class ScriptCommandRegistryTest {
         registered.clear()
         registry.beginActivation()
         gate.withOpen {
-            registry.addCommand(ScriptCommandBuilder("cycle"))
+            registry.addCommand(command("cycle"))
         }
         registry.register()
 
@@ -48,10 +50,10 @@ class ScriptCommandRegistryTest {
 
         gate.withOpen {
             registry.addCommand(
-                ScriptCommandBuilder("first").apply { aliases("shared") }
+                command("first", "shared")
             )
             assertFailsWith<IllegalStateException> {
-                registry.addCommand(ScriptCommandBuilder("shared"))
+                registry.addCommand(command("shared"))
             }
         }
     }
@@ -73,7 +75,7 @@ class ScriptCommandRegistryTest {
         registry.beginActivation()
 
         gate.withOpen {
-            registry.addCommand(ScriptCommandBuilder("external"))
+            registry.addCommand(command("external"))
         }
         assertFailsWith<IllegalStateException> {
             registry.register()
@@ -84,7 +86,7 @@ class ScriptCommandRegistryTest {
     fun `staged command ignores previous generation until registration`() {
         val gate = ScriptRegistrationGate()
         var occupied: Command? = ScriptCommand(
-            ScriptCommandBuilder("reloadable"),
+            command("reloadable"),
             ScriptExecutionGate()
         )
         val registered = mutableListOf<String>()
@@ -101,7 +103,7 @@ class ScriptCommandRegistryTest {
 
         registry.beginActivation()
         gate.withOpen {
-            registry.addCommand(ScriptCommandBuilder("reloadable"))
+            registry.addCommand(command("reloadable"))
         }
         occupied = null
         registry.register()
@@ -113,7 +115,7 @@ class ScriptCommandRegistryTest {
     fun `activation rejects a command registered by an earlier entry`() {
         val gate = ScriptRegistrationGate()
         val occupied = ScriptCommand(
-            ScriptCommandBuilder("shared"),
+            command("shared"),
             ScriptExecutionGate()
         )
         val registry = registry(
@@ -123,7 +125,7 @@ class ScriptCommandRegistryTest {
 
         registry.beginActivation()
         gate.withOpen {
-            registry.addCommand(ScriptCommandBuilder("shared"))
+            registry.addCommand(command("shared"))
         }
 
         assertFailsWith<IllegalStateException> {
@@ -138,7 +140,7 @@ class ScriptCommandRegistryTest {
         registry.beginActivation()
 
         assertFailsWith<IllegalStateException> {
-            registry.addCommand(ScriptCommandBuilder("background"))
+            registry.addCommand(command("background"))
         }
     }
 
@@ -147,7 +149,7 @@ class ScriptCommandRegistryTest {
         val registry = registry(ScriptRegistrationGate())
 
         assertFailsWith<IllegalStateException> {
-            registry.addCommand(ScriptCommandBuilder("constructor"))
+            registry.addCommand(command("constructor"))
         }
     }
 
@@ -162,7 +164,7 @@ class ScriptCommandRegistryTest {
         )
         registry.beginActivation()
         gate.withOpen {
-            registry.addCommand(ScriptCommandBuilder("rejected"))
+            registry.addCommand(command("rejected"))
         }
 
         assertFailsWith<IllegalStateException> {
@@ -185,4 +187,9 @@ class ScriptCommandRegistryTest {
         commandRemover = remover,
         commandUpdater = {}
     )
+
+    private fun command(
+        name: String,
+        vararg aliases: String
+    ) = ScriptCommandDefinition(name = name, aliases = aliases.toList())
 }

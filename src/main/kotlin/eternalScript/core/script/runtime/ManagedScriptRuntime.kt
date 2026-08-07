@@ -4,7 +4,7 @@ import eternalScript.api.script.EternalScript
 import eternalScript.api.script.EternalScriptRuntimeAccess
 import eternalScript.api.script.EternalScriptRuntimeBridge
 import eternalScript.api.script.InternalEternalScriptRuntimeApi
-import eternalScript.api.script.command.ScriptCommandBuilder
+import eternalScript.api.script.command.ScriptCommandDefinition
 import eternalScript.core.script.classloading.ScriptContextClassLoaderElement
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
@@ -67,8 +67,8 @@ internal class ManagedScriptRuntime(
         listenerRegistry.add(event, priority, block)
     }
 
-    override fun command(builder: ScriptCommandBuilder) {
-        commandRegistry.addCommand(builder)
+    override fun command(definition: ScriptCommandDefinition) {
+        commandRegistry.addCommand(definition)
     }
 
     override fun <T : Job> track(job: T): T = taskScope.track(job)

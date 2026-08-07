@@ -1,20 +1,18 @@
 package eternalScript.api.script.command
 
-import org.bukkit.command.CommandSender
+import eternalScript.api.script.EternalScriptDsl
+import eternalScript.api.script.InternalEternalScriptRuntimeApi
 
-class ScriptCommandBuilder(val name: String) {
-    var aliases: List<String> = emptyList()
-    var permission: String? = null
-    var tabCompleter: (
-        sender: CommandSender,
-        alias: String,
-        args: List<String>
-    ) -> List<String> = { _, _, _ -> emptyList() }
-    var executor: (
-        sender: CommandSender,
-        label: String,
-        args: List<String>
-    ) -> Unit = { _, _, _ -> }
+/** Builds one immutable command definition inside [ScriptCommands]. */
+@EternalScriptDsl
+@OptIn(InternalEternalScriptRuntimeApi::class)
+class ScriptCommandBuilder internal constructor(val name: String) {
+    private var aliases: List<String> = emptyList()
+    private var permission: String? = null
+    private var suggestions: ScriptSuggestionContext.() -> List<String> = {
+        emptyList()
+    }
+    private var execution: ScriptCommandContext.() -> Unit = {}
 
     fun aliases(vararg alias: String) {
         aliases = alias.toList()
@@ -24,15 +22,19 @@ class ScriptCommandBuilder(val name: String) {
         this.permission = permission
     }
 
-    fun tabCompleter(
-        block: (sender: CommandSender, alias: String, args: List<String>) -> List<String>
-    ) {
-        tabCompleter = block
+    fun suggests(block: ScriptSuggestionContext.() -> List<String>) {
+        suggestions = block
     }
 
-    fun executor(
-        block: (sender: CommandSender, alias: String, args: List<String>) -> Unit
-    ) {
-        executor = block
+    fun executes(block: ScriptCommandContext.() -> Unit) {
+        execution = block
     }
+
+    internal fun build() = ScriptCommandDefinition(
+        name = name,
+        aliases = aliases,
+        permission = permission,
+        suggestions = suggestions,
+        execution = execution
+    )
 }

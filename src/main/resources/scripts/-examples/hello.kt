@@ -9,10 +9,12 @@ class HelloExample : EternalScript() {
     override fun onEnable() {
         Bukkit.getServer().broadcast(Component.text("Hello, World!"))
 
-        event<PlayerJoinEvent> { event ->
-            Bukkit.getServer().broadcast(
-                Component.text("Hello, ${event.player.name}!")
-            )
+        events {
+            on<PlayerJoinEvent> { event ->
+                Bukkit.getServer().broadcast(
+                    Component.text("Hello, ${event.player.name}!")
+                )
+            }
         }
     }
 }

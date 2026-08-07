@@ -1,6 +1,6 @@
 package eternalScript.api.script
 
-import eternalScript.api.script.command.ScriptCommandBuilder
+import eternalScript.api.script.command.ScriptCommandDefinition
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -46,18 +46,26 @@ class EternalScriptRuntimeAccessTest {
 
         assertEquals(2, script.enableCount)
         assertEquals(1, script.disableCount)
-        assertEquals(listOf("cycle-1", "cycle-2"), bridge.commands)
+        assertEquals(
+            listOf("cycle-1", "cycle-2"),
+            bridge.commands.map(ScriptCommandDefinition::name)
+        )
+        assertTrue(bridge.commands[0] !== bridge.commands[1])
 
         EternalScriptRuntimeAccess.detach(script, bridge)
         val failure = assertFailsWith<IllegalStateException> {
-            script.command("after-dispose") {}
+            script.commands {
+                command("after-dispose") {}
+            }
         }
         assertTrue(failure.message.orEmpty().contains("disposed"))
     }
 
     private class ConstructorRegistrationScript : EternalScript() {
         init {
-            command("constructor") {}
+            commands {
+                command("constructor") {}
+            }
         }
     }
 
@@ -67,7 +75,9 @@ class EternalScriptRuntimeAccessTest {
 
         override fun onEnable() {
             enableCount += 1
-            command("cycle-$enableCount") {}
+            commands {
+                command("cycle-$enableCount") {}
+            }
         }
 
         override fun onDisable() {
@@ -87,7 +97,7 @@ class EternalScriptRuntimeAccessTest {
                 else -> null
             }
         } as Plugin
-        val commands = mutableListOf<String>()
+        val commands = mutableListOf<ScriptCommandDefinition>()
 
         override fun <T : Event> event(
             event: KClass<T>,
@@ -95,8 +105,8 @@ class EternalScriptRuntimeAccessTest {
             block: (T) -> Unit
         ) = Unit
 
-        override fun command(builder: ScriptCommandBuilder) {
-            commands += builder.name
+        override fun command(definition: ScriptCommandDefinition) {
+            commands += definition
         }
 
         override fun <T : Job> track(job: T): T = job

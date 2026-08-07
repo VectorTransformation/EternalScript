@@ -47,10 +47,11 @@ tasks.
 
 This fixture deliberately compiles only the public `eternalScript.api` source
 boundary. Public script code must not import `eternalScript.core`. The removed
-`Script` base type has no compatibility shim, and calls to `plugin`, `event`,
-`command`, `track`, `task`, `launch`, or `async` from an entry constructor are
+`Script` base type has no compatibility shim, and calls to `plugin`, `events`,
+`commands`, `track`, `task`, `launch`, or `async` from an entry constructor are
 rejected because the runtime bridge is attached immediately before
-`onEnable`. Event and command definitions belong in `onEnable` and are rebuilt
+`onEnable`. Define listeners with `events { on<Event> { ... } }` and commands
+with `commands { command("name") { ... } }`; both definition sets are rebuilt
 for each activation.
 
 Check the workspace, bundled project, and bundled examples without evaluating
