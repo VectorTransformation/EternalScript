@@ -11,7 +11,9 @@ import eternalScript.core.script.data.ScriptRegistrationGate
 import eternalScript.core.script.generation.ScriptInstanceLifecycleState
 import eternalScript.core.script.generation.cleanup
 import eternalScript.core.script.generation.throwCombined
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.GlobalExecution
+import eternalScript.core.runtime.PluginHost
+import eternalScript.core.runtime.ServerAccess
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -29,13 +31,23 @@ import kotlin.reflect.KClass
 @OptIn(InternalEternalScriptRuntimeApi::class)
 internal class ManagedScriptRuntime(
     val script: EternalScript,
-    private val pluginProvider: () -> Plugin = { Root.INSTANCE }
+    private val host: PluginHost? = null,
+    server: ServerAccess? = null,
+    private val globalExecution: GlobalExecution? = null
 ) : EternalScriptRuntimeBridge {
     internal val executionGate = ScriptExecutionGate()
     private val registrationGate = ScriptRegistrationGate()
     private val lifecycle = ScriptInstanceLifecycleState()
-    internal val commandRegistry = ScriptCommandRegistry(executionGate, registrationGate)
-    internal val listenerRegistry = ScriptListenerRegistry(executionGate, registrationGate)
+    internal val commandRegistry = ScriptCommandRegistry(
+        executionGate,
+        registrationGate,
+        server
+    )
+    internal val listenerRegistry = ScriptListenerRegistry(
+        executionGate,
+        registrationGate,
+        server
+    )
     internal val taskScope = ScriptTaskScope()
 
     init {
@@ -43,7 +55,9 @@ internal class ManagedScriptRuntime(
     }
 
     override val plugin: Plugin
-        get() = pluginProvider()
+        get() = checkNotNull(host) {
+            "The managed script runtime does not have an attached plugin host."
+        }.plugin
 
     override fun <T : Event> event(
         event: KClass<T>,
@@ -77,7 +91,9 @@ internal class ManagedScriptRuntime(
         context: CoroutineContext,
         block: suspend CoroutineScope.() -> Unit
     ): Job = taskScope.trackAndStart(
-        Root.launch(
+        checkNotNull(globalExecution) {
+            "The managed script runtime does not have global execution access."
+        }.launch(
             context = context + ScriptContextClassLoaderElement(executionGate),
             start = CoroutineStart.LAZY,
             block = block
@@ -88,7 +104,9 @@ internal class ManagedScriptRuntime(
         context: CoroutineContext,
         block: suspend CoroutineScope.() -> T
     ): Deferred<T> = taskScope.trackAndStart(
-        Root.async(
+        checkNotNull(globalExecution) {
+            "The managed script runtime does not have global execution access."
+        }.async(
             context = context + ScriptContextClassLoaderElement(executionGate),
             start = CoroutineStart.LAZY,
             block = block

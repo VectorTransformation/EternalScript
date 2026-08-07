@@ -1,15 +1,17 @@
 package eternalScript.core.manager
 
 import eternalScript.core.data.Config
-import eternalScript.core.data.Resource
+import eternalScript.core.data.PluginPaths
 import org.bukkit.configuration.file.YamlConfiguration
 import java.io.File
 
-object ConfigManager {
+internal class ConfigManager(
+    private val paths: PluginPaths
+) {
     private val cache = mutableMapOf<String, Any>()
 
     fun reload() {
-        val file = Resource.CONFIG.make()
+        val file = paths.config.make()
         val map = Config.entries.associate {
             it.key to Pair(it.value, it.comment)
         }.toSortedMap()

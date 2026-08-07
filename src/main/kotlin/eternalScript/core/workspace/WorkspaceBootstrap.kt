@@ -1,8 +1,9 @@
 package eternalScript.core.workspace
 
-import eternalScript.core.data.Resource
+import eternalScript.core.data.PluginPath
+import eternalScript.core.data.PluginPaths
+import eternalScript.core.runtime.PluginHost
 import eternalScript.core.script.data.ScriptSuffix
-import eternalScript.core.the.Root
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -13,21 +14,25 @@ import java.util.zip.ZipFile
  * Project execution remains owned by DataManager/ScriptManager; this object
  * only performs the one-time workspace bootstrap and returns its diagnostics.
  */
-internal object WorkspaceBootstrap {
+internal class WorkspaceBootstrap(
+    private val host: PluginHost,
+    private val paths: PluginPaths,
+    private val workspace: WorkspaceManager
+) {
     fun initialize(): WorkspaceUpdateResult {
         listOf(
-            Resource.DATA_FOLDER,
-            Resource.LIBS,
-            Resource.CACHE
-        ).forEach(Resource::make)
+            paths.dataFolder,
+            paths.libs,
+            paths.cache
+        ).forEach(PluginPath::make)
 
-        saveResource(Resource.SCRIPTS, *ScriptSuffix.SCRIPT.suffix)
-        saveResource(Resource.LANG, *ScriptSuffix.LANG.suffix)
+        saveResource(paths.scripts, *ScriptSuffix.SCRIPT.suffix)
+        saveResource(paths.lang, *ScriptSuffix.LANG.suffix)
 
-        return WorkspaceManager.initialize(Resource.DATA_FOLDER.toPath())
+        return workspace.initialize(paths.dataFolder.toPath())
     }
 
-    private fun saveResource(resource: Resource, vararg extension: String) {
+    private fun saveResource(resource: PluginPath, vararg extension: String) {
         if (resource.exists()) return
 
         val jarFile = File(javaClass.protectionDomain.codeSource.location.toURI())
@@ -40,7 +45,7 @@ internal object WorkspaceBootstrap {
                     name.startsWith(fileName) && extension.any(name::endsWith)
                 }
                 .forEach { name ->
-                    Root.INSTANCE.saveResource(name, false)
+                    host.saveResource(name, false)
                 }
         }
     }

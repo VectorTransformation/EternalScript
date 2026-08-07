@@ -3,14 +3,19 @@ package eternalScript.core.command
 import com.mojang.brigadier.Command
 import com.mojang.brigadier.context.CommandContext
 import eternalScript.core.feedback.UserFeedback
-import eternalScript.core.feedback.UserFeedbackChannels
 import eternalScript.core.feedback.UserFeedbackEvent
 import eternalScript.core.manager.DataManager
+import eternalScript.core.manager.ScriptProjectStatus
 import eternalScript.core.workspace.WorkspaceManager
+import eternalScript.core.workspace.WorkspaceStatus
 import io.papermc.paper.command.brigadier.CommandSourceStack
 
 /** Administrative command surface for the one active Kotlin script project. */
-internal object MainCommand : CommandBuilder() {
+internal class MainCommand(
+    private val projectController: ProjectCommandController,
+    private val workspaceStatus: () -> WorkspaceStatus,
+    private val feedbackFactory: (org.bukkit.command.CommandSender) -> UserFeedback
+) : CommandBuilder() {
     override val builder = builder("eternalscript") {
         requires(::isOp)
         executes(::status)
@@ -49,16 +54,16 @@ internal object MainCommand : CommandBuilder() {
     override val aliases = listOf("es")
 
     fun reload(context: CommandContext<CommandSourceStack>): Int =
-        result(DataManager.reload(feedback(context)))
+        result(projectController.reload(feedback(context)))
 
     fun check(context: CommandContext<CommandSourceStack>): Int =
-        result(DataManager.check(feedback(context)))
+        result(projectController.check(feedback(context)))
 
     fun unload(context: CommandContext<CommandSourceStack>): Int =
-        result(DataManager.unload(feedback(context)))
+        result(projectController.unload(feedback(context)))
 
     fun list(context: CommandContext<CommandSourceStack>): Int {
-        val status = DataManager.projectStatus()
+        val status = projectController.projectStatus()
         feedback(context).emit(
             UserFeedbackEvent.ProjectEntries(
                 entries = status.generation.entryNames,
@@ -72,8 +77,8 @@ internal object MainCommand : CommandBuilder() {
     fun status(context: CommandContext<CommandSourceStack>): Int {
         feedback(context).emit(
             UserFeedbackEvent.ProjectStatusView(
-                project = DataManager.projectStatus(),
-                workspace = WorkspaceManager.status()
+                project = projectController.projectStatus(),
+                workspace = workspaceStatus()
             )
         )
         return Command.SINGLE_SUCCESS
@@ -81,24 +86,34 @@ internal object MainCommand : CommandBuilder() {
 
     fun workspaceStatus(context: CommandContext<CommandSourceStack>): Int {
         feedback(context).emit(
-            UserFeedbackEvent.WorkspaceStatusView(WorkspaceManager.status())
+            UserFeedbackEvent.WorkspaceStatusView(workspaceStatus())
         )
         return Command.SINGLE_SUCCESS
     }
 
     fun workspaceUpdate(context: CommandContext<CommandSourceStack>): Int =
-        result(DataManager.refreshWorkspace(feedback(context)))
+        result(projectController.refreshWorkspace(feedback(context)))
 
     fun reloadConfig(context: CommandContext<CommandSourceStack>): Int =
-        result(DataManager.reloadConfig(feedback(context)))
+        result(projectController.reloadConfig(feedback(context)))
 
     fun clearCache(context: CommandContext<CommandSourceStack>): Int =
-        result(DataManager.clearCache(feedback(context)))
+        result(projectController.clearCache(feedback(context)))
 
     private fun feedback(context: CommandContext<CommandSourceStack>): UserFeedback =
-        UserFeedbackChannels.reply(context.source.sender)
+        feedbackFactory(context.source.sender)
 
     private fun result(accepted: Boolean): Int =
         if (accepted) Command.SINGLE_SUCCESS else 0
 
+}
+
+internal interface ProjectCommandController {
+    fun reload(feedback: UserFeedback): Boolean
+    fun check(feedback: UserFeedback): Boolean
+    fun unload(feedback: UserFeedback): Boolean
+    fun refreshWorkspace(feedback: UserFeedback): Boolean
+    fun reloadConfig(feedback: UserFeedback): Boolean
+    fun clearCache(feedback: UserFeedback): Boolean
+    fun projectStatus(): ScriptProjectStatus
 }

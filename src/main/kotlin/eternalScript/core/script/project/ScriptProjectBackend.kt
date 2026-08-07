@@ -1,6 +1,5 @@
 package eternalScript.core.script.project
 
-import eternalScript.core.data.Resource
 import eternalScript.core.script.definition.ScriptCompilationCache
 import eternalScript.core.script.definition.ScriptRuntimeClasspath
 import eternalScript.core.script.definition.scriptRuntimeClasspath
@@ -20,13 +19,13 @@ internal interface ScriptProjectBackend {
 }
 
 internal class KotlinProjectBackend(
-    cacheRoot: () -> Path = {
-        Resource.CACHE.toPath().resolve(ScriptCompilationCache.generation())
-    },
-    runtimeClasspath: () -> ScriptRuntimeClasspath = ::scriptRuntimeClasspath
+    cacheRoot: () -> Path,
+    runtimeClasspath: () -> ScriptRuntimeClasspath,
+    cache: ScriptCompilationCache,
+    evaluator: ScriptGenerationEvaluator
 ) : ScriptProjectBackend {
-    private val compiler = ScriptProjectCompiler(cacheRoot, runtimeClasspath)
-    private val evaluator = ScriptGenerationEvaluator()
+    private val compiler = ScriptProjectCompiler(cacheRoot, runtimeClasspath, cache)
+    private val evaluator = evaluator
 
     override fun compile(project: ScriptProjectSource): ResultWithDiagnostics<CompiledScript> =
         compiler.compile(project)

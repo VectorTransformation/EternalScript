@@ -1,4 +1,4 @@
-package eternalScript.core.the
+package eternalScript.core.runtime
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

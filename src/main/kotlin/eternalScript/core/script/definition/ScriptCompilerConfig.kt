@@ -1,13 +1,12 @@
 package eternalScript.core.script.definition
 
 import eternalScript.core.data.Config
-import eternalScript.core.data.Resource
+import eternalScript.core.data.PluginPaths
 import eternalScript.core.extension.searchAllSequence
 import eternalScript.core.manager.ConfigManager
 import eternalScript.core.script.classpath.ScriptPluginClasspathRegistry
 import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
 import eternalScript.core.script.classpath.embeddedClasspathFiles
-import eternalScript.core.the.Root
 import com.mojang.brigadier.Command
 import kotlinx.coroutines.Job
 import kotlinx.serialization.KSerializer
@@ -58,24 +57,16 @@ private data class ClasspathFileState(
     val fileKey: String
 )
 
-internal fun coreClasspath(loader: ClassLoader): List<File> {
+internal fun coreClasspath(loader: ClassLoader, runtimeClass: Class<*>): List<File> {
     return buildSet {
         addAll(classpathFromClassloader(loader, true).orEmpty())
         addAll(loader.embeddedClasspathFiles())
-        runtimeClasspathAnchors()
+        runtimeClasspathAnchors(runtimeClass)
             .filter(loader::resolvesSameClass)
             .mapNotNullTo(this, Class<*>::codeSourceFile)
     }.map { file -> file.toPath().toAbsolutePath().normalize().toFile() }
         .filter(File::exists)
         .distinct()
-}
-
-fun pluginClasspath(): List<File> {
-    val snapshot = ScriptPluginClasspathRegistry.requireCurrent()
-    return buildList {
-        addAll(snapshot.coreFiles)
-        addAll(snapshot.pluginFiles)
-    }.distinctBy { file -> file.toPath().toAbsolutePath().normalize() }
 }
 
 private fun ClassLoader.resolvesSameClass(type: Class<*>): Boolean =
@@ -97,8 +88,11 @@ internal fun URL.toClasspathFile(): File? = when (protocol) {
     else -> null
 }
 
-fun libraryClasspath() = ConfigManager.value<List<String>>(Config.LIBS).flatMap { lib ->
-    Resource.PLUGINS.child(lib).searchAllSequence({ it.extension == "jar" })
+internal fun libraryClasspath(
+    config: ConfigManager,
+    paths: PluginPaths
+) = config.value<List<String>>(Config.LIBS).flatMap { lib ->
+    paths.plugins.child(lib).searchAllSequence({ it.extension == "jar" })
 }
 
 internal data class ScriptRuntimeClasspath(
@@ -139,8 +133,10 @@ internal fun runtimeClasspathFingerprint(
     return digest.digest().toHexString()
 }
 
-internal fun scriptRuntimeClasspath(): ScriptRuntimeClasspath {
-    val snapshot = ScriptPluginClasspathRegistry.requireCurrent()
+internal fun scriptRuntimeClasspath(
+    registry: ScriptPluginClasspathRegistry
+): ScriptRuntimeClasspath {
+    val snapshot = registry.requireCurrent()
     return ScriptRuntimeClasspath(
         files = snapshot.files,
         libraryFiles = snapshot.libraryFiles,
@@ -246,8 +242,8 @@ private const val MAX_SNAPSHOT_ATTEMPTS = 3
 private const val HASH_BUFFER_SIZE = 64 * 1024
 
 @OptIn(org.jetbrains.kotlin.buildtools.api.ExperimentalBuildToolsApi::class)
-private fun runtimeClasspathAnchors() = listOf(
-    Root.INSTANCE.javaClass,
+private fun runtimeClasspathAnchors(runtimeClass: Class<*>) = listOf(
+    runtimeClass,
     Unit::class.java,
     IllegalCallableAccessException::class.java,
     KSerializer::class.java,

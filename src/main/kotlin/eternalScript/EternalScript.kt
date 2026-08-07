@@ -1,21 +1,17 @@
 package eternalScript
 
-import eternalScript.core.command.MainCommand
-import eternalScript.core.manager.DataManager
-import eternalScript.core.manager.MetricsManager
-import eternalScript.core.manager.ScriptManager
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.PluginRuntime
 import org.bukkit.plugin.java.JavaPlugin
 
 class EternalScript : JavaPlugin() {
+    private var runtime: PluginRuntime? = null
+
     override fun onEnable() {
-        Root.startup()
-        Root.register(MainCommand)
-        Root.start(DataManager)
-        Root.start(MetricsManager)
+        check(runtime == null) { "EternalScript is already enabled." }
+        runtime = PluginRuntime(this).also(PluginRuntime::start)
     }
 
     override fun onDisable() {
-        Root.stop(DataManager, ScriptManager)
+        runtime?.also { runtime = null }?.stop()
     }
 }

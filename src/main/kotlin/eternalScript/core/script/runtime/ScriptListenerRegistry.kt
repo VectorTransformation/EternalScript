@@ -2,7 +2,7 @@ package eternalScript.core.script.runtime
 
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.ServerAccess
 import org.bukkit.event.Event
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
@@ -10,7 +10,8 @@ import kotlin.reflect.KClass
 
 internal class ScriptListenerRegistry(
     private val executionGate: ScriptExecutionGate,
-    private val registrationGate: ScriptRegistrationGate
+    private val registrationGate: ScriptRegistrationGate,
+    private val server: ServerAccess? = null
 ) : Listener {
     private val registrations = ScriptRegistrationLifecycle<() -> Unit>()
 
@@ -25,7 +26,8 @@ internal class ScriptListenerRegistry(
         block: (T) -> Unit
     ) {
         val registration = {
-            Root.register(event, this, priority) { value ->
+            checkNotNull(server) { "Server access is required to register script events." }
+                .registerEvent(event, this, priority) { value ->
                 executionGate.withActive {
                     block(value)
                 }
@@ -48,14 +50,14 @@ internal class ScriptListenerRegistry(
     fun unregister() {
         val release = registrations.deactivate()
         if (release.wasActive && release.registrations.isNotEmpty()) {
-            Root.unregister(this)
+            checkNotNull(server).unregister(this)
         }
     }
 
     fun clear() {
         val release = registrations.dispose()
         if (release.wasActive && release.registrations.isNotEmpty()) {
-            Root.unregister(this)
+            checkNotNull(server).unregister(this)
         }
     }
 }

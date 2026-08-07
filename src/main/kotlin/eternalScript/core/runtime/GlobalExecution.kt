@@ -1,10 +1,5 @@
-package eternalScript.core.the
+package eternalScript.core.runtime
 
-import eternalScript.EternalScript
-import eternalScript.core.command.CommandBuilder
-import eternalScript.core.manager.PluginStartable
-import eternalScript.core.manager.PluginStoppable
-import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -17,77 +12,33 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
-import org.bukkit.Bukkit
-import org.bukkit.event.Event
-import org.bukkit.event.EventPriority
-import org.bukkit.event.HandlerList
-import org.bukkit.event.Listener
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
-import kotlin.reflect.KClass
 
-internal object Root {
-    const val ORIGIN = "EternalScript"
-
-    val INSTANCE = pluginManager().getPlugin(ORIGIN) as EternalScript
-
-    fun pluginManager() = Bukkit.getPluginManager()
-
-    fun plugins() = pluginManager().plugins
-
-    // event
-
-    fun <T : Event> register(
-        event: KClass<T>,
-        listener: Listener,
-        priority: EventPriority = EventPriority.NORMAL,
-        block: (T) -> Unit
-    ) = pluginManager().registerEvent(
-        event.java,
-        listener,
-        priority,
-        { _, executor ->
-            if (event.java.isInstance(executor)) {
-                block(event.java.cast(executor))
-            }
-        },
-        INSTANCE
-    )
-
-    fun unregister(vararg listener: Listener) = listener.forEach(HandlerList::unregisterAll)
-
-    // command
-
-    fun lifecycleManager() = INSTANCE.lifecycleManager
-
-    private fun registerEventHandler(commandBuilder: CommandBuilder) = lifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS) { handler ->
-        handler.registrar().register(commandBuilder.builder.build(), commandBuilder.description, commandBuilder.aliases)
-    }
-
-    // util
-
-    fun register(vararg commandBuilder: CommandBuilder) = commandBuilder.forEach(::registerEventHandler)
-
-    fun start(vararg component: PluginStartable) = component.forEach(PluginStartable::start)
-
-    fun stop(vararg component: PluginStoppable) = component.forEach(PluginStoppable::stop)
-
-    fun dataFolder() = INSTANCE.dataFolder
-
-    fun onlinePlayers() = Bukkit.getOnlinePlayers()
-
-    fun classLoader(plugin: String) = pluginManager().getPlugin(plugin)?.javaClass?.classLoader
-
+/** Coroutine ownership and Folia global-thread handoff for one plugin lifecycle. */
+internal class GlobalExecution(
+    private val server: ServerAccess
+) {
     private val scopeLock = Any()
     @Volatile
     private var scope = newScope()
     private var lifecycleEpoch = 0L
     private var lifecycleOpen = false
+    private val pendingGlobalTasks = GlobalTaskQueue()
 
     val semaphore = Semaphore(20)
-    private val pendingGlobalTasks = GlobalTaskQueue()
+
+    fun start() {
+        synchronized(scopeLock) {
+            if (lifecycleOpen) return
+            pendingGlobalTasks.rejectAll(::staleGlobalTask)
+            if (!scope.isActive) scope = newScope()
+            lifecycleEpoch += 1
+            lifecycleOpen = true
+        }
+    }
 
     fun launch(
         context: CoroutineContext = Dispatchers.Default,
@@ -101,36 +52,19 @@ internal object Root {
         block: suspend CoroutineScope.() -> T
     ) = scope.async(context, start, block)
 
-    fun startup() {
-        synchronized(scopeLock) {
-            if (lifecycleOpen) return
-            pendingGlobalTasks.rejectAll(::staleGlobalTask)
-            if (!scope.isActive) {
-                scope = newScope()
-            }
-            lifecycleEpoch += 1
-            lifecycleOpen = true
+    fun newTaskOwner(): GlobalTaskOwner = synchronized(scopeLock) {
+        check(lifecycleOpen) {
+            "A global-task owner cannot be created outside an active plugin lifecycle."
         }
+        GlobalTaskOwner(lifecycleEpoch)
     }
 
-    internal fun newGlobalTaskOwner(): GlobalTaskOwner =
-        synchronized(scopeLock) {
-            check(lifecycleOpen) {
-                "A global-task owner cannot be created outside an active plugin lifecycle."
-            }
-            GlobalTaskOwner(lifecycleEpoch)
-        }
-
-    internal fun beginGlobalTaskOwnerShutdown(owner: GlobalTaskOwner): Boolean =
-        synchronized(scopeLock) {
-            owner.beginShutdownDrain(lifecycleEpoch)
-        }
-
-    fun shutdown() {
-        shutdown(null)
+    fun beginTaskOwnerShutdown(owner: GlobalTaskOwner): Boolean = synchronized(scopeLock) {
+        owner.beginShutdownDrain(lifecycleEpoch)
     }
 
-    internal fun shutdown(drainingOwner: GlobalTaskOwner?) {
+    /** Closes admission while allowing one synchronously drained operation owner. */
+    fun closeAdmission(drainingOwner: GlobalTaskOwner?) {
         synchronized(scopeLock) {
             lifecycleOpen = false
             scope.cancel()
@@ -138,14 +72,21 @@ internal object Root {
         pendingGlobalTasks.rejectAllExcept(drainingOwner, ::closedGlobalTask)
     }
 
-    internal fun closeGlobalTaskOwner(owner: GlobalTaskOwner) {
+    fun closeTaskOwner(owner: GlobalTaskOwner) {
         owner.close()
         pendingGlobalTasks.rejectOwner(owner, ::closedGlobalTask)
     }
 
-    suspend fun <T> ioContext(
-        block: suspend CoroutineScope.() -> T
-    ) = withContext(Dispatchers.IO, block)
+    fun shutdown() {
+        synchronized(scopeLock) {
+            lifecycleOpen = false
+            scope.cancel()
+        }
+        pendingGlobalTasks.rejectAll(::closedGlobalTask)
+    }
+
+    suspend fun <T> io(block: suspend CoroutineScope.() -> T): T =
+        withContext(Dispatchers.IO, block)
 
     suspend fun <T> global(block: () -> T): T {
         val owner = coroutineContext[GlobalTaskOwner]
@@ -153,7 +94,7 @@ internal object Root {
             GlobalLifecycleSnapshot(lifecycleEpoch, lifecycleOpen)
         }
         ensureGlobalTaskAllowed(owner, snapshot)
-        if (Bukkit.isGlobalTickThread()) return block()
+        if (server.isGlobalTickThread) return block()
 
         return suspendCancellableCoroutine { continuation ->
             val task = synchronized(scopeLock) {
@@ -162,35 +103,9 @@ internal object Root {
                     null
                 } else {
                     owner?.enqueueIfAllowed(current) {
-                        pendingGlobalTasks.enqueue(
-                            epoch = current.epoch,
-                            owner = owner,
-                            action = {
-                                if (continuation.isActive) {
-                                    continuation.resumeWith(runCatching(block))
-                                }
-                            },
-                            rejection = { exception ->
-                                if (continuation.isActive) {
-                                    continuation.resumeWith(Result.failure(exception))
-                                }
-                            }
-                        )
+                        enqueueGlobalTask(current, owner, continuation, block)
                     } ?: if (owner == null) {
-                        pendingGlobalTasks.enqueue(
-                            epoch = current.epoch,
-                            owner = null,
-                            action = {
-                                if (continuation.isActive) {
-                                    continuation.resumeWith(runCatching(block))
-                                }
-                            },
-                            rejection = { exception ->
-                                if (continuation.isActive) {
-                                    continuation.resumeWith(Result.failure(exception))
-                                }
-                            }
-                        )
+                        enqueueGlobalTask(current, null, continuation, block)
                     } else {
                         null
                     }
@@ -206,7 +121,7 @@ internal object Root {
                 pendingGlobalTasks.cancel(task)
             }
             try {
-                INSTANCE.server.globalRegionScheduler.execute(INSTANCE) {
+                server.executeGlobal {
                     runGlobalTask(task)
                 }
             } catch (exception: Throwable) {
@@ -215,18 +130,32 @@ internal object Root {
         }
     }
 
-    /**
-     * Completes only one script operation's queued [global] handoffs while
-     * plugin shutdown is synchronously waiting on the global tick thread.
-     * Unowned and differently owned callbacks are never executed by this
-     * shutdown pump.
-     */
-    internal fun drainPendingGlobalTasks(owner: GlobalTaskOwner): Int {
-        check(Bukkit.isGlobalTickThread()) {
+    fun drainPendingGlobalTasks(owner: GlobalTaskOwner): Int {
+        check(server.isGlobalTickThread) {
             "Pending global tasks may only be drained from the global tick thread."
         }
         return pendingGlobalTasks.drain(owner, ::runClaimedGlobalTask)
     }
+
+    private fun <T> enqueueGlobalTask(
+        snapshot: GlobalLifecycleSnapshot,
+        owner: GlobalTaskOwner?,
+        continuation: kotlin.coroutines.Continuation<T>,
+        block: () -> T
+    ): GlobalTaskQueue.Task = pendingGlobalTasks.enqueue(
+        epoch = snapshot.epoch,
+        owner = owner,
+        action = {
+            if (continuation.context[kotlinx.coroutines.Job]?.isActive != false) {
+                continuation.resumeWith(runCatching(block))
+            }
+        },
+        rejection = { exception ->
+            if (continuation.context[kotlinx.coroutines.Job]?.isActive != false) {
+                continuation.resumeWith(Result.failure(exception))
+            }
+        }
+    )
 
     private fun runGlobalTask(task: GlobalTaskQueue.Task): Boolean =
         pendingGlobalTasks.claim(task)?.let(::runClaimedGlobalTask) != null
@@ -246,9 +175,7 @@ internal object Root {
         owner: GlobalTaskOwner?,
         snapshot: GlobalLifecycleSnapshot
     ) {
-        if (!globalTaskAllowed(owner, snapshot)) {
-            throw closedGlobalTask()
-        }
+        if (!globalTaskAllowed(owner, snapshot)) throw closedGlobalTask()
     }
 
     private fun globalTaskAllowed(
@@ -263,34 +190,24 @@ internal object Root {
     private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 }
 
-internal data class GlobalLifecycleSnapshot(
-    val epoch: Long,
-    val open: Boolean
-)
+internal data class GlobalLifecycleSnapshot(val epoch: Long, val open: Boolean)
 
 internal class GlobalTaskOwner internal constructor(
     val lifecycleEpoch: Long
 ) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<GlobalTaskOwner>
 
-    private enum class State {
-        ACTIVE,
-        SHUTDOWN_DRAIN,
-        CLOSED
-    }
+    private enum class State { ACTIVE, SHUTDOWN_DRAIN, CLOSED }
 
     private val monitor = Any()
     private var state = State.ACTIVE
 
-    internal fun beginShutdownDrain(currentEpoch: Long): Boolean =
-        synchronized(monitor) {
-            if (lifecycleEpoch != currentEpoch || state == State.CLOSED) {
-                false
-            } else {
-                state = State.SHUTDOWN_DRAIN
-                true
-            }
+    internal fun beginShutdownDrain(currentEpoch: Long): Boolean = synchronized(monitor) {
+        if (lifecycleEpoch != currentEpoch || state == State.CLOSED) false else {
+            state = State.SHUTDOWN_DRAIN
+            true
         }
+    }
 
     internal fun <T> enqueueIfAllowed(
         snapshot: GlobalLifecycleSnapshot,
@@ -299,15 +216,12 @@ internal class GlobalTaskOwner internal constructor(
         if (!allowsLocked(snapshot)) null else enqueue()
     }
 
-    internal fun allows(snapshot: GlobalLifecycleSnapshot): Boolean =
-        synchronized(monitor) {
-            allowsLocked(snapshot)
-        }
+    internal fun allows(snapshot: GlobalLifecycleSnapshot): Boolean = synchronized(monitor) {
+        allowsLocked(snapshot)
+    }
 
-    internal fun close() {
-        synchronized(monitor) {
-            state = State.CLOSED
-        }
+    internal fun close() = synchronized(monitor) {
+        state = State.CLOSED
     }
 
     private fun allowsLocked(snapshot: GlobalLifecycleSnapshot): Boolean {
@@ -328,7 +242,6 @@ internal class GlobalTaskQueue {
         private val rejection: (Throwable) -> Unit
     ) {
         fun run() = action()
-
         fun reject(exception: Throwable) = rejection(exception)
     }
 
@@ -341,8 +254,7 @@ internal class GlobalTaskQueue {
         rejection: (Throwable) -> Unit = {}
     ): Task = Task(epoch, owner, action, rejection).also(tasks::add)
 
-    fun claim(task: Task): Task? =
-        task.takeIf(tasks::remove)
+    fun claim(task: Task): Task? = task.takeIf(tasks::remove)
 
     fun cancel(task: Task): Boolean = tasks.remove(task)
 
@@ -368,13 +280,10 @@ internal class GlobalTaskQueue {
     fun rejectOwner(owner: GlobalTaskOwner, exception: () -> Throwable): Int =
         rejectMatching({ task -> task.owner === owner }, exception)
 
-    fun rejectAllExcept(
-        owner: GlobalTaskOwner?,
-        exception: () -> Throwable
-    ): Int = rejectMatching({ task -> task.owner !== owner }, exception)
+    fun rejectAllExcept(owner: GlobalTaskOwner?, exception: () -> Throwable): Int =
+        rejectMatching({ task -> task.owner !== owner }, exception)
 
-    fun rejectAll(exception: () -> Throwable): Int =
-        rejectMatching({ true }, exception)
+    fun rejectAll(exception: () -> Throwable): Int = rejectMatching({ true }, exception)
 
     private fun rejectMatching(
         predicate: (Task) -> Boolean,
@@ -396,5 +305,6 @@ internal class GlobalTaskQueue {
 private fun closedGlobalTask() =
     CancellationException("The EternalScript lifecycle is shutting down.")
 
-private fun staleGlobalTask() =
-    CancellationException("The global handoff belongs to an expired EternalScript lifecycle.")
+private fun staleGlobalTask() = CancellationException(
+    "The global handoff belongs to an expired EternalScript lifecycle."
+)

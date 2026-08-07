@@ -22,11 +22,13 @@ internal class GenerationRuntimeHandle(
     private val loader: ScriptGenerationClassLoader,
     private val generationJar: Path,
     runtimes: List<ManagedScriptRuntime>,
+    private val generationRegistry: ScriptGenerationRegistry = ScriptGenerationRegistry(),
+    cache: ScriptCompilationCache? = null,
     private val retainGenerationJar: (Path) -> Unit = { path ->
-        ScriptCompilationCache.retain(path.toFile())
+        cache?.retain(path.toFile())
     },
     private val releaseGenerationJar: (Path) -> Unit = { path ->
-        ScriptCompilationCache.release(path.toFile())
+        cache?.release(path.toFile())
     }
 ) : GenerationRuntimeResource {
     private val runtimes = runtimes.toList()
@@ -44,7 +46,7 @@ internal class GenerationRuntimeHandle(
                 runtime.executionGate.attachContextClassLoader(loader)
                 loaderAttached += runtime
             }
-            ScriptGenerationRegistry.register(loader)
+            generationRegistry.register(loader)
         } catch (exception: Throwable) {
             loaderAttached.asReversed().forEach { runtime ->
                 runtime.executionGate.detachContextClassLoader()
@@ -62,7 +64,7 @@ internal class GenerationRuntimeHandle(
 
         val failures = mutableListOf<Throwable>()
         cleanup(failures) {
-            ScriptGenerationRegistry.unregister(loader)
+            generationRegistry.unregister(loader)
         }
         runtimes.forEach { runtime ->
             cleanup(failures) {

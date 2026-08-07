@@ -1,7 +1,8 @@
 package eternalScript.core.extension
 
-import eternalScript.core.data.Resource
-import eternalScript.core.the.Root
+import eternalScript.core.data.PluginPath
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.charset.Charset
 import kotlin.io.path.invariantSeparatorsPathString
@@ -43,10 +44,11 @@ fun File.clear() {
     deleteRecursively()
 }
 
-fun File.relativize(resource: Resource = Resource.PLUGINS) = resource.toPath().relativize(toPath()).invariantSeparatorsPathString
+internal fun File.relativize(resource: PluginPath) =
+    resource.toPath().relativize(toPath()).invariantSeparatorsPathString
 
 suspend fun File.readTextAsync(
     charset: Charset = Charsets.UTF_8
-) = Root.ioContext {
+) = withContext(Dispatchers.IO) {
     readText(charset)
 }

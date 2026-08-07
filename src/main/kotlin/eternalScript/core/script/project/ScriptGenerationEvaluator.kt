@@ -2,9 +2,14 @@ package eternalScript.core.script.project
 
 import eternalScript.api.script.EternalScript
 import eternalScript.core.script.classloading.ScriptGenerationClassLoader
+import eternalScript.core.script.classloading.ScriptGenerationRegistry
 import eternalScript.core.script.classloading.withThreadContextClassLoader
 import eternalScript.core.script.generation.GenerationRuntimeHandle
+import eternalScript.core.script.definition.ScriptCompilationCache
 import eternalScript.core.script.runtime.ManagedScriptRuntime
+import eternalScript.core.runtime.GlobalExecution
+import eternalScript.core.runtime.PluginHost
+import eternalScript.core.runtime.ServerAccess
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Modifier
 import kotlin.script.experimental.api.*
@@ -13,7 +18,13 @@ import kotlin.script.experimental.api.*
  * Turns a compiled project artifact into a staged script generation.
  * Activation, replacement, and rollback remain owned by ScriptManager.
  */
-internal class ScriptGenerationEvaluator {
+internal class ScriptGenerationEvaluator(
+    private val host: PluginHost,
+    private val server: ServerAccess,
+    private val globalExecution: GlobalExecution,
+    private val cache: ScriptCompilationCache,
+    private val generationRegistry: ScriptGenerationRegistry
+) {
     fun evaluate(
         compiledScript: CompiledScript
     ): ResultWithDiagnostics<EvaluationResult> {
@@ -51,7 +62,12 @@ internal class ScriptGenerationEvaluator {
                 )
 
                 scriptTypes.forEach { type ->
-                    runtimes += ManagedScriptRuntime(instantiateEternalScript(type))
+                    runtimes += ManagedScriptRuntime(
+                        instantiateEternalScript(type),
+                        host,
+                        server,
+                        globalExecution
+                    )
                 }
 
                 check(runtimes.isNotEmpty()) {
@@ -60,7 +76,9 @@ internal class ScriptGenerationEvaluator {
                 val resource = GenerationRuntimeHandle(
                     loader,
                     compiledScript.generationJar,
-                    runtimes.toList()
+                    runtimes.toList(),
+                    generationRegistry,
+                    cache
                 )
                 runtimeResource = resource
                 val runtime = ScriptProjectRuntime(runtimes.toList(), resource)

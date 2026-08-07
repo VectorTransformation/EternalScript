@@ -7,7 +7,7 @@ import java.nio.file.Path
  * folder. All filesystem failures are reported in [WorkspaceUpdateResult] so
  * workspace maintenance never has to prevent the plugin from enabling.
  */
-internal object WorkspaceManager {
+internal class WorkspaceManager {
     private var workspaceRoot: Path? = null
     private var reconciler: WorkspaceReconciler? = null
     private var classpathEntries: List<Path> = emptyList()

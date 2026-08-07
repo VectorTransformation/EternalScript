@@ -41,7 +41,8 @@ class PresentationBoundaryContractTest {
             allowedOwners = setOf(
                 "eternalScript/core/feedback/LocaleCatalog.kt",
                 "eternalScript/core/manager/ReloadManager.kt",
-                "eternalScript/core/feedback/LocalizedUserFeedback.kt"
+                "eternalScript/core/feedback/LocalizedUserFeedback.kt",
+                "eternalScript/core/runtime/PluginRuntime.kt"
             )
         )
     }
@@ -52,7 +53,8 @@ class PresentationBoundaryContractTest {
             symbol = "CommandSender",
             allowedOwners = setOf(
                 "eternalScript/core/script/command/ScriptCommand.kt",
-                "eternalScript/core/feedback/LocalizedUserFeedback.kt"
+                "eternalScript/core/feedback/LocalizedUserFeedback.kt",
+                "eternalScript/core/command/MainCommand.kt"
             )
         )
     }

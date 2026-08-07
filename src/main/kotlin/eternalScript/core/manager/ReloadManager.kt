@@ -2,13 +2,16 @@ package eternalScript.core.manager
 
 import eternalScript.core.feedback.LocaleCatalog
 
-object ReloadManager : PluginStartable {
+internal class ReloadManager(
+    private val config: ConfigManager,
+    private val locales: LocaleCatalog
+) : PluginStartable {
     override fun start() {
         reload()
     }
 
     fun reload() {
-        ConfigManager.reload()
-        LocaleCatalog.reload()
+        config.reload()
+        locales.reload()
     }
 }

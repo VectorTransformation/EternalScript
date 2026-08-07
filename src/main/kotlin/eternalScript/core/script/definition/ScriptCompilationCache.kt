@@ -1,6 +1,5 @@
 package eternalScript.core.script.definition
 
-import eternalScript.core.data.Resource
 import java.io.File
 import java.nio.file.Path
 import java.util.UUID
@@ -12,10 +11,10 @@ private const val CACHE_CLEANUP_FILE = ".cleanup"
 private const val MAX_CACHE_JARS = 128
 private const val MAX_CACHE_AGE_MILLIS = 30L * 24L * 60L * 60L * 1000L
 
-internal object ScriptCompilationCache {
-    private val storage by lazy {
-        ScriptCompilationCacheStorage(Resource.CACHE.file)
-    }
+internal class ScriptCompilationCache(
+    cacheRoot: File
+) {
+    private val storage = ScriptCompilationCacheStorage(cacheRoot)
 
     fun prepare() = storage.prepare()
 

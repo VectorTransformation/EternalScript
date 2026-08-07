@@ -1,6 +1,5 @@
 package eternalScript.core.script.project
 
-import eternalScript.core.data.Resource
 import eternalScript.core.script.classpath.ScriptClassIdentityConflictException
 import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
 import eternalScript.core.script.definition.ScriptCompilationCache
@@ -16,10 +15,9 @@ import kotlin.reflect.KClass
  * artifact. It does not create class loaders or activate script instances.
  */
 internal class ScriptProjectCompiler(
-    private val cacheRoot: () -> Path = {
-        Resource.CACHE.toPath().resolve(ScriptCompilationCache.generation())
-    },
-    private val runtimeClasspath: () -> ScriptRuntimeClasspath = ::scriptRuntimeClasspath
+    private val cacheRoot: () -> Path,
+    private val runtimeClasspath: () -> ScriptRuntimeClasspath,
+    private val cache: ScriptCompilationCache
 ) {
     fun compile(project: ScriptProjectSource): ResultWithDiagnostics<CompiledScript> {
         val runtimeClasspath = try {
@@ -45,7 +43,7 @@ internal class ScriptProjectCompiler(
         val cleanupReports = runCatching {
             compiler.pruneCaches(
                 buildSet {
-                    addAll(ScriptCompilationCache.retainedGenerationJars())
+                    addAll(cache.retainedGenerationJars())
                     compilation.generationJar?.let { jar -> add(jar) }
                 }
             ).failures.map { (path, message) ->

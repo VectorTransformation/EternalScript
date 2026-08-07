@@ -9,11 +9,12 @@ import eternalScript.core.script.project.ScriptProjectSource
 
 /**
  * Public script API facade. Generation compilation, activation, replacement,
- * and disposal live in [ScriptGenerationCoordinator]; this object exposes
+ * and disposal live in [ScriptGenerationCoordinator]; this instance exposes
  * current project state to commands and scripts.
  */
-internal object ScriptManager : PluginStoppable {
-    private val generation = ScriptGenerationCoordinator()
+internal class ScriptManager(
+    private val generation: ScriptGenerationCoordinator
+) : PluginStoppable {
 
     internal fun open() = generation.open()
 

@@ -3,7 +3,7 @@ package eternalScript.core.environment
 import eternalScript.core.script.classpath.ScriptPluginClasspathCapture
 import eternalScript.core.script.classpath.ScriptPluginClasspathRegistry
 import eternalScript.core.script.classpath.ScriptPluginClasspathSnapshot
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.ServerAccess
 import eternalScript.core.workspace.WorkspaceBootstrap
 import eternalScript.core.workspace.WorkspaceManager
 import eternalScript.core.workspace.WorkspaceUpdateResult
@@ -15,16 +15,21 @@ import java.io.File
  * Script operations may ask it for a coherent snapshot without owning the
  * workspace reconciliation or its user-facing diagnostics.
  */
-internal object ScriptEnvironmentCoordinator {
-    fun clear() = ScriptPluginClasspathRegistry.clear()
+internal class ScriptEnvironmentCoordinator(
+    private val server: ServerAccess,
+    private val classpathRegistry: ScriptPluginClasspathRegistry,
+    private val workspace: WorkspaceManager,
+    private val bootstrap: WorkspaceBootstrap
+) {
+    fun clear() = classpathRegistry.clear()
 
-    fun isReady(): Boolean = ScriptPluginClasspathRegistry.current() != null
+    fun isReady(): Boolean = classpathRegistry.current() != null
 
-    fun initialize(): WorkspaceUpdateResult = WorkspaceBootstrap.initialize()
+    fun initialize(): WorkspaceUpdateResult = bootstrap.initialize()
 
     fun capturePluginClasspath(excludedPlugin: Plugin? = null): ScriptPluginClasspathCapture =
-        ScriptPluginClasspathRegistry.capture(
-            Root.plugins().asSequence()
+        classpathRegistry.capture(
+            server.plugins.asSequence()
                 .filterNot { plugin -> plugin === excludedPlugin }
                 .asIterable()
         )
@@ -32,11 +37,11 @@ internal object ScriptEnvironmentCoordinator {
     fun refreshClasspathAndWorkspace(
         capture: ScriptPluginClasspathCapture
     ): Pair<ScriptPluginClasspathSnapshot, WorkspaceUpdateResult> {
-        val snapshot = ScriptPluginClasspathRegistry.refresh(capture)
-        val workspace = WorkspaceManager.update(
+        val snapshot = classpathRegistry.refresh(capture)
+        val workspaceResult = workspace.update(
             classpathEntries = snapshot.files.map(File::toPath),
             activePluginCount = snapshot.plugins.size
         )
-        return snapshot to workspace
+        return snapshot to workspaceResult
     }
 }

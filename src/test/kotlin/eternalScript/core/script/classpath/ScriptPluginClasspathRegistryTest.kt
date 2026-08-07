@@ -14,17 +14,19 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ScriptPluginClasspathRegistryTest {
+    private val registry = ScriptPluginClasspathRegistry()
+
     @AfterTest
     fun clearRegistry() {
-        ScriptPluginClasspathRegistry.resetForTests()
+        registry.resetForTests()
     }
 
     @Test
     fun `classpath consumers fail clearly before ServerLoad refresh`() {
-        ScriptPluginClasspathRegistry.resetForTests()
+        registry.resetForTests()
 
         val failure = assertFailsWith<IllegalStateException> {
-            ScriptPluginClasspathRegistry.requireCurrent()
+            registry.requireCurrent()
         }
 
         assertTrue(failure.message.orEmpty().contains("after ServerLoadEvent"))
@@ -39,11 +41,11 @@ class ScriptPluginClasspathRegistryTest {
             val betaLoader = PassthroughClassLoader(parent)
             val alpha = CapturedScriptPlugin("Alpha", "1.0.0", alphaLoader, listOf(files.alpha))
             val beta = CapturedScriptPlugin("beta", "2.0.0", betaLoader, listOf(files.beta))
-            val first = ScriptPluginClasspathRegistry.buildSnapshot(
+            val first = registry.buildSnapshot(
                 capture(1, parent, listOf(beta, alpha), files.core),
                 listOf(files.library)
             )
-            val second = ScriptPluginClasspathRegistry.buildSnapshot(
+            val second = registry.buildSnapshot(
                 capture(2, parent, listOf(alpha, beta), files.core),
                 listOf(files.library)
             )
@@ -69,7 +71,7 @@ class ScriptPluginClasspathRegistryTest {
             val parent = javaClass.classLoader
             val loader = PassthroughClassLoader(parent)
             val embeddedLoader = PassthroughClassLoader(parent)
-            val snapshot = ScriptPluginClasspathRegistry.buildSnapshot(
+            val snapshot = registry.buildSnapshot(
                 ScriptPluginClasspathCapture(
                     revision = 1,
                     parentClassLoader = parent,
@@ -120,7 +122,7 @@ class ScriptPluginClasspathRegistryTest {
         try {
             val parent = javaClass.classLoader
             val loader = PassthroughClassLoader(parent)
-            val base = ScriptPluginClasspathRegistry.buildSnapshot(
+            val base = registry.buildSnapshot(
                 capture(
                     1,
                     parent,
@@ -129,7 +131,7 @@ class ScriptPluginClasspathRegistryTest {
                 ),
                 listOf(files.library)
             )
-            val changedVersion = ScriptPluginClasspathRegistry.buildSnapshot(
+            val changedVersion = registry.buildSnapshot(
                 capture(
                     2,
                     parent,
@@ -139,7 +141,7 @@ class ScriptPluginClasspathRegistryTest {
                 listOf(files.library)
             )
             files.alpha.toPath().writeText("changed-content-with-another-size")
-            val changedContent = ScriptPluginClasspathRegistry.buildSnapshot(
+            val changedContent = registry.buildSnapshot(
                 capture(
                     3,
                     parent,
@@ -175,11 +177,11 @@ class ScriptPluginClasspathRegistryTest {
                 files.core
             )
 
-            val current = ScriptPluginClasspathRegistry.refresh(newCapture, listOf(files.library))
-            val staleResult = ScriptPluginClasspathRegistry.refresh(oldCapture, listOf(files.library))
+            val current = registry.refresh(newCapture, listOf(files.library))
+            val staleResult = registry.refresh(oldCapture, listOf(files.library))
 
             assertSame(current, staleResult)
-            assertSame(current, ScriptPluginClasspathRegistry.current())
+            assertSame(current, registry.current())
         } finally {
             files.delete()
         }
@@ -204,12 +206,12 @@ class ScriptPluginClasspathRegistryTest {
                 files.core
             )
 
-            ScriptPluginClasspathRegistry.clear()
+            registry.clear()
             assertFailsWith<CancellationException> {
-                ScriptPluginClasspathRegistry.refresh(staleCapture, listOf(files.library))
+                registry.refresh(staleCapture, listOf(files.library))
             }
 
-            assertNull(ScriptPluginClasspathRegistry.current())
+            assertNull(registry.current())
         } finally {
             files.delete()
         }

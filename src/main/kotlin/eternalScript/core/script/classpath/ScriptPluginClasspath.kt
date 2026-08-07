@@ -1,10 +1,9 @@
 package eternalScript.core.script.classpath
 
 import eternalScript.core.script.definition.coreClasspath
-import eternalScript.core.script.definition.libraryClasspath
 import eternalScript.core.script.definition.runtimeClasspathFingerprint
 import eternalScript.core.script.definition.toClasspathFile
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.PLUGIN_NAME
 import org.bukkit.plugin.Plugin
 import java.io.File
 import java.util.IdentityHashMap
@@ -210,7 +209,10 @@ internal data class ResolvedPluginClass(
     val ownerNames: Set<String>
 )
 
-internal object ScriptPluginClasspathRegistry {
+internal class ScriptPluginClasspathRegistry(
+    private val runtimeClass: Class<*> = ScriptPluginClasspathRegistry::class.java,
+    private val libraryClasspath: () -> List<File> = { emptyList() }
+) {
     private data class PublishedSnapshot(
         val revision: Long,
         val snapshot: ScriptPluginClasspathSnapshot
@@ -234,11 +236,10 @@ internal object ScriptPluginClasspathRegistry {
             )
             .toList()
         val parent = enabled
-            .firstOrNull { plugin -> plugin.name == Root.ORIGIN }
+            .firstOrNull { plugin -> plugin.name == PLUGIN_NAME }
             ?.javaClass
             ?.classLoader
-            ?: Root.classLoader(Root.ORIGIN)
-            ?: ScriptPluginClasspathRegistry::class.java.classLoader
+            ?: runtimeClass.classLoader
         val capturedPlugins = enabled.map { plugin ->
             val loader = plugin.javaClass.classLoader
             CapturedScriptPlugin(
@@ -252,7 +253,7 @@ internal object ScriptPluginClasspathRegistry {
         return ScriptPluginClasspathCapture(
             revision = nextRevision.incrementAndGet(),
             parentClassLoader = parent,
-            coreFiles = coreClasspath(parent),
+            coreFiles = coreClasspath(parent, runtimeClass),
             plugins = capturedPlugins
         )
     }

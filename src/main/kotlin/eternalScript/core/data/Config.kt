@@ -1,6 +1,6 @@
 package eternalScript.core.data
 
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.PLUGIN_NAME
 
 enum class Config(
     val key: String,
@@ -17,7 +17,7 @@ enum class Config(
     ),
     LIBS(
         "libs",
-        listOf("${Root.ORIGIN}/libs"),
+        listOf("$PLUGIN_NAME/libs"),
         listOf("Directories containing additional compile/runtime libraries.")
     ),
     DEBUG(

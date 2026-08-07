@@ -5,13 +5,14 @@ import eternalScript.core.script.project.KotlinProjectBackend
 import eternalScript.core.script.project.ScriptProjectBackend
 import eternalScript.core.script.project.ScriptProjectSource
 import eternalScript.core.script.project.ScriptProjectRuntime
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.GlobalExecution
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
+import java.util.logging.Logger
 import kotlin.script.experimental.api.valueOrNull
 
 /**
@@ -20,9 +21,12 @@ import kotlin.script.experimental.api.valueOrNull
  * this coordinator controls epoch fences, ownership, activation, replacement,
  * rollback, and disposal.
  */
-internal class ScriptGenerationCoordinator {
-    private val backend: ScriptProjectBackend = KotlinProjectBackend()
-    private val diagnostics = GenerationDiagnostics()
+internal class ScriptGenerationCoordinator(
+    private val backend: ScriptProjectBackend,
+    private val globalExecution: GlobalExecution,
+    private val diagnostics: GenerationDiagnostics,
+    private val logger: Logger
+) {
     private val active = AtomicReference<ManagedProjectGeneration?>()
     private val activeView = ActiveGenerationView(active::get)
     private val lifecycle = GenerationCoordinatorLifecycle()
@@ -83,7 +87,7 @@ internal class ScriptGenerationCoordinator {
             TRACKED_WORK_SHUTDOWN_TIMEOUT_MILLIS
         )
         if (!callbacksDrained || !trackedWorkDrained) {
-            Root.INSTANCE.logger.warning(
+            logger.warning(
                 "Script generation shutdown exceeded its drain deadline " +
                     "(callbacks=$callbacksDrained, trackedWork=$trackedWorkDrained); " +
                     "forced cleanup will continue because the plugin is disabling."
@@ -151,7 +155,7 @@ internal class ScriptGenerationCoordinator {
         if (compiled == null) return false
 
         return withContext(NonCancellable) {
-            val replacement = Root.global stage@{
+            val replacement = globalExecution.global stage@{
                 if (!canCommit(epoch, environment) || active.get() !== expected) return@stage null
                 val evaluation = backend.evaluate(compiled)
                 diagnostics.report(
@@ -192,7 +196,7 @@ internal class ScriptGenerationCoordinator {
             } ?: return@withContext false
 
             if (!canCommit(epoch, environment) || active.get() !== expected) {
-                Root.global {
+                globalExecution.global {
                     discard(replacement, report)
                 }
                 return@withContext false
@@ -213,7 +217,7 @@ internal class ScriptGenerationCoordinator {
         report: MutableScriptProjectReport
     ): Boolean {
         if (!canCommit(epoch, environment)) {
-            Root.global {
+            globalExecution.global {
                 discard(replacement, report)
             }
             return false
@@ -222,7 +226,7 @@ internal class ScriptGenerationCoordinator {
         var activationAttempted = false
         var activationFailure: Throwable? = null
         val activated = try {
-            Root.global {
+            globalExecution.global {
                 if (!canCommit(epoch, environment)) {
                     false
                 } else {
@@ -256,7 +260,7 @@ internal class ScriptGenerationCoordinator {
 
         active.compareAndSet(replacement, null)
         activationFailure?.let { exception ->
-            Root.global {
+            globalExecution.global {
                 diagnostics.lifecycleFailure(
                     replacement.project,
                     ScriptLifecycleFailurePhase.ENABLE,
@@ -269,7 +273,7 @@ internal class ScriptGenerationCoordinator {
         if (activationAttempted) {
             cleanupFailedActivation(replacement, report)
         } else {
-            Root.global {
+            globalExecution.global {
                 discard(replacement, report)
             }
         }
@@ -297,7 +301,7 @@ internal class ScriptGenerationCoordinator {
                 TRACKED_WORK_DRAIN_TIMEOUT_MILLIS
             )
             if (!trackedWorkDrained) {
-                Root.INSTANCE.logger.warning(
+                logger.warning(
                     "Tracked script work did not stop within ${TRACKED_WORK_DRAIN_TIMEOUT_MILLIS}ms; " +
                         "the generation replacement was aborted. Cleanup is deferred with new " +
                         "script entries blocked because cancelled work cannot be restored."
@@ -324,7 +328,7 @@ internal class ScriptGenerationCoordinator {
             return result
         } finally {
             if (ownsReplacement) {
-                Root.global {
+            globalExecution.global {
                     discard(replacement, report)
                 }
             }
@@ -389,7 +393,7 @@ internal class ScriptGenerationCoordinator {
         report: MutableScriptProjectReport
     ): Boolean = withOwnershipCleanup(
         cleanup = {
-            Root.global {
+            globalExecution.global {
                 discard(replacement, report)
             }
         }
@@ -412,7 +416,7 @@ internal class ScriptGenerationCoordinator {
         report: MutableScriptProjectReport
     ): Boolean {
         val deactivated = try {
-            Root.global {
+            globalExecution.global {
                 if (!canCommit(epoch, environment) || active.get() !== current) {
                     false
                 } else {
@@ -421,7 +425,7 @@ internal class ScriptGenerationCoordinator {
                 }
             }
         } catch (exception: Throwable) {
-            Root.global {
+            globalExecution.global {
                 diagnostics.lifecycleFailure(
                     current.project,
                     ScriptLifecycleFailurePhase.DISABLE,
@@ -437,7 +441,7 @@ internal class ScriptGenerationCoordinator {
         if (!deactivated) return false
 
         val activationAttempted = try {
-            Root.global {
+            globalExecution.global {
                 if (!canCommit(epoch, environment) || active.get() !== current) {
                     false
                 } else {
@@ -449,7 +453,7 @@ internal class ScriptGenerationCoordinator {
                 }
             }
         } catch (exception: Throwable) {
-            Root.global {
+            globalExecution.global {
                 diagnostics.lifecycleFailure(
                     replacement.project,
                     ScriptLifecycleFailurePhase.ENABLE,
@@ -463,7 +467,7 @@ internal class ScriptGenerationCoordinator {
             return false
         }
         if (!activationAttempted) {
-            Root.global {
+            globalExecution.global {
                 discard(replacement, report)
             }
             restore(current, epoch, report)
@@ -471,7 +475,7 @@ internal class ScriptGenerationCoordinator {
         }
 
         val published = try {
-            Root.global {
+            globalExecution.global {
                 if (
                     !canCommit(epoch, environment) ||
                     !active.compareAndSet(current, replacement)
@@ -496,7 +500,7 @@ internal class ScriptGenerationCoordinator {
         } catch (exception: Throwable) {
             active.compareAndSet(replacement, current)
             pendingRetirements.claim(current)
-            Root.global {
+            globalExecution.global {
                 diagnostics.lifecycleFailure(
                     replacement.project,
                     ScriptLifecycleFailurePhase.PUBLISH,
@@ -514,7 +518,7 @@ internal class ScriptGenerationCoordinator {
             return false
         }
 
-        Root.global {
+        globalExecution.global {
             if (!pendingRetirements.claim(current)) return@global
             current.runtime.retire()
             dispose(current, "retire cleanup", report)
@@ -531,7 +535,7 @@ internal class ScriptGenerationCoordinator {
             return false
         }
         return try {
-            Root.global {
+            globalExecution.global {
                 if (generation in invalidatedGenerations) return@global false
                 if (!isOpen(epoch) || active.get() !== generation) {
                     generation.runtime.retire()
@@ -549,7 +553,7 @@ internal class ScriptGenerationCoordinator {
         } catch (exception: Throwable) {
             val cleanupFailures = mutableListOf<Throwable>()
             try {
-                Root.global {
+                globalExecution.global {
                     runCatching(generation.runtime::retire)
                         .exceptionOrNull()
                         ?.let(cleanupFailures::add)
@@ -565,14 +569,14 @@ internal class ScriptGenerationCoordinator {
                 false
             }
             if (!trackedWorkDrained) {
-                Root.INSTANCE.logger.warning(
+                logger.warning(
                     "Restored script-generation work did not stop within " +
                         "${TRACKED_WORK_DRAIN_TIMEOUT_MILLIS}ms; forced cleanup will continue."
                 )
             }
             cleanupFailures.forEach(exception::addSuppressed)
 
-            Root.global {
+            globalExecution.global {
                 runCatching(generation.runtime::deactivate)
                     .exceptionOrNull()
                     ?.let { cleanupFailure ->
@@ -614,7 +618,7 @@ internal class ScriptGenerationCoordinator {
         val trackedWorkDrained = try {
             runtime.cancelTrackedWorkAndJoin(TRACKED_WORK_DRAIN_TIMEOUT_MILLIS)
         } catch (exception: Throwable) {
-            Root.global {
+            globalExecution.global {
                 diagnostics.lifecycleFailure(
                     generation.project,
                     ScriptLifecycleFailurePhase.CLEANUP,
@@ -626,12 +630,12 @@ internal class ScriptGenerationCoordinator {
             false
         }
         if (!trackedWorkDrained) {
-            Root.INSTANCE.logger.warning(
+            logger.warning(
                 "Failed script-generation work did not stop within " +
                     "${TRACKED_WORK_DRAIN_TIMEOUT_MILLIS}ms; forced cleanup will continue."
             )
         }
-        Root.global {
+        globalExecution.global {
             if (!pendingCandidates.claim(generation)) return@global
             try {
                 runtime.deactivate()
@@ -737,7 +741,7 @@ internal class ScriptGenerationCoordinator {
                 TRACKED_WORK_DRAIN_TIMEOUT_MILLIS
             )
             if (!trackedWorkDrained) {
-                Root.INSTANCE.logger.warning(
+                logger.warning(
                     "Tracked script work did not stop within ${TRACKED_WORK_DRAIN_TIMEOUT_MILLIS}ms; " +
                         "the generation remains blocked and cleanup is deferred."
                 )
@@ -745,7 +749,7 @@ internal class ScriptGenerationCoordinator {
                 return null
             }
 
-            return Root.global clear@{
+            return globalExecution.global clear@{
                 if (!isOpen(epoch) || active.get() !== current) return@clear null
                 val count = clearGeneration(current, report)
                 ownsFrozenCurrent = false
@@ -814,7 +818,7 @@ internal class ScriptGenerationCoordinator {
             TRACKED_WORK_SHUTDOWN_TIMEOUT_MILLIS
         )
         if (!callbacksDrained || !trackedWorkDrained) {
-            Root.INSTANCE.logger.warning(
+            logger.warning(
                 "A plugin used by the active script generation was disabled, but " +
                     "generation drain exceeded its deadline " +
                     "(callbacks=$callbacksDrained, trackedWork=$trackedWorkDrained). " +
@@ -824,7 +828,7 @@ internal class ScriptGenerationCoordinator {
         }
 
         val report = MutableScriptProjectReport(logSummaries = true)
-        return Root.global clear@{
+        return globalExecution.global clear@{
             if (!isOpen(epoch) || active.get() !== current) return@clear null
             clearGeneration(current, report)
         }

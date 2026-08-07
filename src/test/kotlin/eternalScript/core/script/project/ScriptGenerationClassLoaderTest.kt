@@ -124,6 +124,7 @@ class ScriptGenerationClassLoaderTest {
             setOf("Alpha")
         )
         val jar = testJar()
+        val registry = ScriptGenerationRegistry()
         val handle = GenerationRuntimeHandle(
             loader,
             jar,
@@ -131,13 +132,14 @@ class ScriptGenerationClassLoaderTest {
                 ManagedScriptRuntime(object : EternalScript() {}),
                 ManagedScriptRuntime(object : EternalScript() {})
             ),
+            generationRegistry = registry,
             retainGenerationJar = {},
             releaseGenerationJar = {}
         )
 
         try {
             assertEquals(setOf("Alpha"), handle.pluginDependencies)
-            ScriptGenerationRegistry.invalidate("alpha")
+            registry.invalidate("alpha")
             assertFailsWith<DisabledScriptPluginClassException> {
                 loader.loadClass(DuplicateApi::class.java.name)
             }

@@ -7,12 +7,15 @@ import eternalScript.core.script.project.ScriptProjectSource
 import eternalScript.core.script.project.failureDiagnostics
 import eternalScript.core.script.project.remapRuntimeStackTrace
 import eternalScript.core.script.project.runtimePosition
-import eternalScript.core.the.Root
 import java.util.logging.Level
+import java.util.logging.Logger
 import kotlin.script.experimental.api.ResultWithDiagnostics
 
 /** Collects classloader-free diagnostic summaries without rendering user output. */
-internal class GenerationDiagnostics {
+internal class GenerationDiagnostics(
+    private val config: ConfigManager,
+    private val logger: Logger
+) {
     fun report(
         project: ScriptProjectSource,
         result: ResultWithDiagnostics<*>,
@@ -28,9 +31,9 @@ internal class GenerationDiagnostics {
                 column = diagnostic.column,
                 message = diagnostic.report.message
             )
-            if (ConfigManager.value(Config.DEBUG)) {
+            if (config.value<Boolean>(Config.DEBUG)) {
                 diagnostic.report.exception?.let { exception ->
-                    Root.INSTANCE.logger.log(
+                    logger.log(
                         Level.WARNING,
                         "EternalScript ${phase.name.lowercase()} diagnostic at " +
                             "${diagnostic.sourceName}:${diagnostic.line ?: "-"}.",
@@ -62,13 +65,13 @@ internal class GenerationDiagnostics {
         report.lifecycleFailures += summary
 
         if (report.logSummaries) {
-            Root.INSTANCE.logger.warning(
+            logger.warning(
                 "EternalScript lifecycle failure during $technicalPhase at " +
                     "$sourceName:${line ?: "-"}: ${summary.reason}"
             )
         }
-        if (ConfigManager.value(Config.DEBUG)) {
-            Root.INSTANCE.logger.log(
+        if (config.value<Boolean>(Config.DEBUG)) {
+            logger.log(
                 Level.WARNING,
                 "EternalScript lifecycle exception during $technicalPhase at " +
                     "$sourceName:${line ?: "-"}.",

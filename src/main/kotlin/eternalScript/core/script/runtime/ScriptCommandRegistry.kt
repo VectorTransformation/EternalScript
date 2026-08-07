@@ -4,18 +4,30 @@ import eternalScript.core.script.command.ScriptCommand
 import eternalScript.api.script.command.ScriptCommandBuilder
 import eternalScript.core.script.data.ScriptExecutionGate
 import eternalScript.core.script.data.ScriptRegistrationGate
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.PLUGIN_NAME
+import eternalScript.core.runtime.ServerAccess
 import org.bukkit.command.Command
 
 internal class ScriptCommandRegistry(
     private val executionGate: ScriptExecutionGate,
     private val registrationGate: ScriptRegistrationGate,
-    private val commandLookup: (String) -> Command? = { key -> commandMap.getCommand(key) },
-    private val commandRegistrar: (Command) -> Boolean = { command ->
-        commandMap.register(command.name, prefix, command)
+    server: ServerAccess? = null,
+    private val commandLookup: (String) -> Command? = { key ->
+        checkNotNull(server) { "Server access is required to register script commands." }
+            .command(key)
     },
-    private val commandRemover: (Command) -> Unit = ::removeCommand,
-    private val commandUpdater: () -> Unit = ::updateOnlineCommands
+    private val commandRegistrar: (Command) -> Boolean = { command ->
+        checkNotNull(server) { "Server access is required to register script commands." }
+            .registerScriptCommand(command)
+    },
+    private val commandRemover: (Command) -> Unit = { command ->
+        checkNotNull(server) { "Server access is required to remove script commands." }
+            .removeScriptCommand(command)
+    },
+    private val commandUpdater: () -> Unit = {
+        checkNotNull(server) { "Server access is required to update script commands." }
+            .updateOnlineCommands()
+    }
 ) {
     private val registrations = ScriptRegistrationLifecycle<Command>()
 
@@ -24,10 +36,10 @@ internal class ScriptCommandRegistry(
     }
 
     fun addCommand(builder: ScriptCommandBuilder) {
-        val commandKeys = commandKeys(builder.name, builder.aliases)
+        val commandKeys = scriptCommandKeys(builder.name, builder.aliases)
         check(
             commands().none { command ->
-                commandKeys.overlaps(commandKeys(command.name, command.aliases))
+                commandKeys.overlaps(scriptCommandKeys(command.name, command.aliases))
             }
         ) {
             "Command ${builder.name} conflicts with another command in the same Script."
@@ -84,7 +96,7 @@ internal class ScriptCommandRegistry(
     private fun commands() = registrations.snapshot()
 
     private fun requireCommandKeysAvailable(command: Command) {
-        val occupied = commandKeys(command.name, command.aliases)
+        val occupied = scriptCommandKeys(command.name, command.aliases)
             .mapNotNull(commandLookup)
             .firstOrNull()
             ?: return
@@ -100,38 +112,14 @@ internal class ScriptCommandRegistry(
         commandUpdater()
     }
 
-    companion object {
-        private val commandMap by lazy { Root.INSTANCE.server.commandMap }
-        private val knownCommands by lazy { commandMap.knownCommands }
-        private val prefix = Root.ORIGIN.lowercase()
-
-        private fun commandKeys(name: String, aliases: List<String>) =
-            (listOf(name) + aliases).flatMap { key ->
-                listOf(key, "$prefix:$key")
-            }
-
-        private fun removeCommand(command: Command) {
-            commandKeys(command.name, command.aliases).forEach { key ->
-                if (knownCommands[key] === command) {
-                    knownCommands.remove(key)
-                }
-            }
-            command.unregister(commandMap)
-        }
-
-        private fun updateOnlineCommands() {
-            Root.onlinePlayers().forEach { player ->
-                player.scheduler.run(
-                    Root.INSTANCE,
-                    { player.updateCommands() },
-                    null
-                )
-            }
-        }
-
-        private fun List<String>.overlaps(other: List<String>): Boolean =
-            any { candidate ->
-                other.any { existing -> candidate.equals(existing, ignoreCase = true) }
-            }
-    }
 }
+
+private fun scriptCommandKeys(name: String, aliases: List<String>) =
+    (listOf(name) + aliases).flatMap { key ->
+        listOf(key, "${PLUGIN_NAME.lowercase()}:$key")
+    }
+
+private fun List<String>.overlaps(other: List<String>): Boolean =
+    any { candidate ->
+        other.any { existing -> candidate.equals(existing, ignoreCase = true) }
+    }

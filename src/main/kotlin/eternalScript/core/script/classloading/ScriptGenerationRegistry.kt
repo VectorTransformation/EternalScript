@@ -4,7 +4,7 @@ import java.util.Collections
 import java.util.WeakHashMap
 
 /** Tracks live generation loaders for plugin invalidation. */
-internal object ScriptGenerationRegistry {
+internal class ScriptGenerationRegistry {
     private val generations = Collections.synchronizedMap(
         WeakHashMap<ScriptGenerationClassLoader, Unit>()
     )
@@ -29,6 +29,12 @@ internal object ScriptGenerationRegistry {
     internal fun unregister(classLoader: ScriptGenerationClassLoader) {
         synchronized(generations) {
             generations.remove(classLoader)
+        }
+    }
+
+    fun clear() {
+        synchronized(generations) {
+            generations.clear()
         }
     }
 }

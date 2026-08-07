@@ -2,11 +2,11 @@ package eternalScript.core.feedback
 
 import eternalScript.core.data.Config
 import eternalScript.core.manager.ConfigManager
-import eternalScript.core.the.Root
 import net.kyori.adventure.text.Component
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
 import java.util.logging.Level
+import java.util.logging.Logger
 
 internal sealed interface UserFeedbackTarget {
     data class Reply(val sender: CommandSender) : UserFeedbackTarget
@@ -14,16 +14,49 @@ internal sealed interface UserFeedbackTarget {
     data object Silent : UserFeedbackTarget
 }
 
-internal object UserFeedbackChannels {
-    val serverLog: UserFeedback = LocalizedUserFeedback(UserFeedbackTarget.ServerLog)
-    val silent: UserFeedback = LocalizedUserFeedback(UserFeedbackTarget.Silent)
+internal class UserFeedbackChannels(
+    private val config: ConfigManager,
+    locales: LocaleCatalog,
+    private val logger: Logger
+) {
+    private val delivery = LocalizedUserFeedbackDelivery(
+        renderer = UserFeedbackTextRenderer(locales::translate),
+        logSink = { message, text -> defaultLog(logger, message, text) }
+    )
+    val serverLog: UserFeedback = LocalizedUserFeedback(
+        UserFeedbackTarget.ServerLog,
+        language = { config.value(Config.LANG) },
+        delivery = delivery,
+        logger = logger
+    )
+    val silent: UserFeedback = LocalizedUserFeedback(
+        UserFeedbackTarget.Silent,
+        language = { config.value(Config.LANG) },
+        delivery = delivery,
+        logger = logger
+    )
 
     fun reply(sender: CommandSender): UserFeedback {
-        val language = ConfigManager.value<String>(Config.LANG)
+        val language = config.value<String>(Config.LANG)
         return LocalizedUserFeedback(
             target = UserFeedbackTarget.Reply(sender),
-            language = { language }
+            language = { language },
+            delivery = delivery,
+            logger = logger
         )
+    }
+
+    private fun defaultLog(
+        logger: Logger,
+        message: UserFeedbackMessage,
+        text: String
+    ) {
+        when {
+            message.internalFailure -> logger.severe(text)
+            message.severity == UserFeedbackSeverity.ERROR -> logger.warning(text)
+            message.severity == UserFeedbackSeverity.WARNING -> logger.warning(text)
+            else -> logger.info(text)
+        }
     }
 }
 
@@ -49,15 +82,16 @@ internal class UserFeedbackTextRenderer(
 
 private class LocalizedUserFeedback(
     private val target: UserFeedbackTarget,
-    private val language: () -> String = { ConfigManager.value(Config.LANG) },
-    private val delivery: LocalizedUserFeedbackDelivery = LocalizedUserFeedbackDelivery()
+    private val language: () -> String,
+    private val delivery: LocalizedUserFeedbackDelivery,
+    private val logger: Logger
 ) : UserFeedback {
     override fun emit(event: UserFeedbackEvent) {
         if (target == UserFeedbackTarget.Silent) return
         runCatching {
             delivery.deliver(target, event, language())
         }.onFailure { exception ->
-            Root.INSTANCE.logger.log(
+            logger.log(
                 Level.SEVERE,
                 "Failed to render EternalScript user feedback event " +
                     event.javaClass.simpleName,
@@ -71,11 +105,11 @@ private class LocalizedUserFeedback(
 /** Testable Bukkit/log routing adapter for already structured feedback. */
 internal class LocalizedUserFeedbackDelivery(
     private val presenter: UserFeedbackPresenter = UserFeedbackPresenter,
-    private val renderer: UserFeedbackTextRenderer = UserFeedbackTextRenderer(LocaleCatalog::translate),
+    private val renderer: UserFeedbackTextRenderer,
     private val replySink: (CommandSender, String) -> Unit = { sender, message ->
         sender.sendMessage(Component.text("[EternalScript] $message"))
     },
-    private val logSink: (UserFeedbackMessage, String) -> Unit = ::defaultLog
+    private val logSink: (UserFeedbackMessage, String) -> Unit
 ) {
     fun deliver(
         target: UserFeedbackTarget,
@@ -113,16 +147,6 @@ internal class LocalizedUserFeedbackDelivery(
     private fun List<UserFeedbackMessage>.countDetails() =
         count { it.stage == UserFeedbackStage.DETAIL }
 
-    private companion object {
-        fun defaultLog(message: UserFeedbackMessage, text: String) {
-            when {
-                message.internalFailure -> Root.INSTANCE.logger.severe(text)
-                message.severity == UserFeedbackSeverity.ERROR -> Root.INSTANCE.logger.warning(text)
-                message.severity == UserFeedbackSeverity.WARNING -> Root.INSTANCE.logger.warning(text)
-                else -> Root.INSTANCE.logger.info(text)
-            }
-        }
-    }
 }
 
 private const val MAX_PLAYER_DETAILS = 5

@@ -2,6 +2,7 @@ package eternalScript.core.manager
 
 import eternalScript.core.environment.EnvironmentRefreshRequest
 import eternalScript.core.environment.ScriptEnvironmentCoordinator
+import eternalScript.core.command.ProjectCommandController
 import eternalScript.core.feedback.UserFeedback
 import eternalScript.core.feedback.UserFeedbackChannels
 import eternalScript.core.feedback.UserFeedbackEvent
@@ -17,15 +18,16 @@ import eternalScript.core.script.generation.ScriptProjectCheckResult
 import eternalScript.core.script.generation.ScriptProjectReport
 import eternalScript.core.script.generation.ScriptProjectUnloadOutcome
 import eternalScript.core.script.project.runtimeScriptProjectRepository
-import eternalScript.core.the.GlobalTaskOwner
-import eternalScript.core.the.Root
+import eternalScript.core.runtime.GlobalExecution
+import eternalScript.core.runtime.GlobalTaskOwner
+import eternalScript.core.runtime.PluginHost
+import eternalScript.core.runtime.ServerAccess
 import eternalScript.core.workspace.WorkspaceManager
 import eternalScript.core.workspace.WorkspaceUpdateResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import org.bukkit.Bukkit
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.server.PluginDisableEvent
@@ -35,7 +37,18 @@ import org.bukkit.plugin.Plugin
 import java.util.UUID
 import java.util.logging.Level
 
-object DataManager : PluginStartable, PluginStoppable, Listener {
+internal class DataManager(
+    private val host: PluginHost,
+    private val server: ServerAccess,
+    private val globalExecution: GlobalExecution,
+    private val scriptManager: ScriptManager,
+    private val environment: ScriptEnvironmentCoordinator,
+    private val workspaceManager: WorkspaceManager,
+    private val reloadManager: ReloadManager,
+    private val compilationCache: ScriptCompilationCache,
+    private val generationRegistry: ScriptGenerationRegistry,
+    private val feedbackChannels: UserFeedbackChannels
+) : PluginStartable, PluginStoppable, Listener, ProjectCommandController {
     private val operationLock = Any()
     private var operation: ScriptProjectOperation? = null
     private var lastUserOperation: ScriptOperationSnapshot? = null
@@ -44,7 +57,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
     private var pendingEnvironmentRefresh: EnvironmentRefreshRequest? = null
     private val initialLoad = InitialScriptLoadCoordinator()
     private val lifecycle = DataManagerLifecycle()
-    private val scriptRepository by lazy(::runtimeScriptProjectRepository)
+    private val scriptRepository = runtimeScriptProjectRepository(host.paths)
 
     override fun start() {
         synchronized(operationLock) {
@@ -52,47 +65,47 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
             automaticLoadState = AutomaticProjectLoadState.NOT_ATTEMPTED
             startupWorkspace = null
         }
-        ScriptManager.open()
+        scriptManager.open()
         initializeWorkspace()
         registerServerLifecycle()
     }
 
     fun shutdown() {
-        Root.unregister(this as Listener)
+        server.unregister(this)
         val current = synchronized(operationLock) {
             lifecycle.close()
-            ScriptManager.close()
+            scriptManager.close()
             pendingEnvironmentRefresh = null
             initialLoad.reset()
             automaticLoadState = AutomaticProjectLoadState.NOT_ATTEMPTED
             startupWorkspace = null
             operation.also { activeOperation ->
                 operation = null
-                activeOperation?.owner?.let(Root::beginGlobalTaskOwnerShutdown)
+                activeOperation?.owner?.let(globalExecution::beginTaskOwnerShutdown)
             }
         }
-        Root.shutdown(current?.owner)
+        globalExecution.closeAdmission(current?.owner)
         current?.job?.cancel()
         val operationStopped = try {
             awaitOperationShutdown(
                 operation = current?.job,
                 timeoutMillis = OPERATION_SHUTDOWN_TIMEOUT_MILLIS,
-                isGlobalThread = Bukkit.isGlobalTickThread(),
+                isGlobalThread = server.isGlobalTickThread,
                 pumpGlobalTasks = {
-                    current?.owner?.let(Root::drainPendingGlobalTasks)
+                    current?.owner?.let(globalExecution::drainPendingGlobalTasks)
                 }
             )
         } finally {
-            current?.owner?.let(Root::closeGlobalTaskOwner)
+            current?.owner?.let(globalExecution::closeTaskOwner)
         }
         if (!operationStopped) {
-            Root.INSTANCE.logger.warning(
+            host.logger.warning(
                 "The active script project operation did not stop within " +
                     "${OPERATION_SHUTDOWN_TIMEOUT_MILLIS}ms; shutdown will continue " +
                     "with generation commits fenced."
             )
         }
-        ScriptEnvironmentCoordinator.clear()
+        environment.clear()
     }
 
     override fun stop() {
@@ -100,13 +113,13 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
     }
 
     private fun initializeWorkspace() {
-        Root.start(ReloadManager)
+        reloadManager.start()
         synchronized(operationLock) {
-            startupWorkspace = ScriptEnvironmentCoordinator.initialize()
+            startupWorkspace = environment.initialize()
         }
     }
 
-    internal fun reload(feedback: UserFeedback): Boolean {
+    override fun reload(feedback: UserFeedback): Boolean {
         if (!requireEnvironment(feedback)) return false
         return startOperation(feedback, ScriptOperationKind.RELOAD) { session ->
             val project = scriptRepository.snapshot()
@@ -117,20 +130,20 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
                 emit(
                     feedback,
                     UserFeedbackEvent.ProjectSourceMissing(
-                        activeProject = ScriptManager.generationSnapshot().exists
+                        activeProject = scriptManager.generationSnapshot().exists
                     )
                 )
                 return@startOperation false
             }
 
             if (!lifecycle.accepts(session)) return@startOperation false
-            val result = ScriptManager.load(project)
+            val result = scriptManager.load(project)
             emit(feedback, UserFeedbackEvent.ProjectReloadFinished(result))
             result.activated
         }
     }
 
-    internal fun check(feedback: UserFeedback): Boolean {
+    override fun check(feedback: UserFeedback): Boolean {
         if (!requireEnvironment(feedback)) return false
         return startOperation(feedback, ScriptOperationKind.CHECK) { session ->
             val project = scriptRepository.snapshot()
@@ -152,16 +165,16 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
             }
 
             if (!lifecycle.accepts(session)) return@startOperation false
-            val result = ScriptManager.check(project)
+            val result = scriptManager.check(project)
             emit(feedback, UserFeedbackEvent.ProjectCheckFinished(total, result))
             result.passed
         }
     }
 
-    internal fun unload(feedback: UserFeedback): Boolean {
+    override fun unload(feedback: UserFeedback): Boolean {
         return startOperation(feedback, ScriptOperationKind.UNLOAD) { session ->
             if (!lifecycle.accepts(session)) return@startOperation false
-            val before = ScriptManager.generationSnapshot()
+            val before = scriptManager.generationSnapshot()
             if (before.exists) {
                 emit(
                     feedback,
@@ -171,7 +184,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
                     )
                 )
             }
-            val result = ScriptManager.clearNow()
+            val result = scriptManager.clearNow()
             emit(
                 feedback,
                 UserFeedbackEvent.ProjectUnloadFinished(
@@ -183,29 +196,29 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         }
     }
 
-    internal fun reloadConfig(feedback: UserFeedback): Boolean {
+    override fun reloadConfig(feedback: UserFeedback): Boolean {
         return startOperation(feedback, ScriptOperationKind.CONFIG_RELOAD) { session ->
             emit(feedback, UserFeedbackEvent.ConfigurationReloadStarted)
-            val capture = Root.global {
+            val capture = globalExecution.global {
                 if (lifecycle.accepts(session)) {
-                    ReloadManager.reload()
+                    reloadManager.reload()
                 }
-                ScriptEnvironmentCoordinator.capturePluginClasspath()
+                environment.capturePluginClasspath()
             }
             if (!lifecycle.accepts(session)) return@startOperation false
-            val (_, workspace) = ScriptEnvironmentCoordinator.refreshClasspathAndWorkspace(capture)
+            val (_, workspace) = environment.refreshClasspathAndWorkspace(capture)
             emit(feedback, UserFeedbackEvent.ConfigurationReloadFinished(workspace))
             workspace.successful
         }
     }
 
-    internal fun refreshWorkspace(feedback: UserFeedback): Boolean {
+    override fun refreshWorkspace(feedback: UserFeedback): Boolean {
         return startOperation(feedback, ScriptOperationKind.WORKSPACE_UPDATE) { session ->
             emit(feedback, UserFeedbackEvent.WorkspaceUpdateStarted)
             if (!lifecycle.accepts(session)) return@startOperation false
 
-            val capture = Root.global { ScriptEnvironmentCoordinator.capturePluginClasspath() }
-            val (_, update) = ScriptEnvironmentCoordinator.refreshClasspathAndWorkspace(capture)
+            val capture = globalExecution.global { environment.capturePluginClasspath() }
+            val (_, update) = environment.refreshClasspathAndWorkspace(capture)
             if (!lifecycle.accepts(session)) return@startOperation false
 
             emit(feedback, UserFeedbackEvent.WorkspaceUpdateFinished(update))
@@ -213,14 +226,14 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         }
     }
 
-    internal fun clearCache(feedback: UserFeedback): Boolean {
+    override fun clearCache(feedback: UserFeedback): Boolean {
         return startOperation(feedback, ScriptOperationKind.CACHE_CLEAR) { session ->
             emit(feedback, UserFeedbackEvent.CacheClearStarted)
             val cleared = synchronized(operationLock) {
                 if (!lifecycle.accepts(session)) {
                     false
                 } else {
-                    ScriptCompilationCache.reset()
+                    compilationCache.reset()
                     true
                 }
             }
@@ -243,8 +256,8 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
             val tracker = ScriptOperationTracker(
                 ScriptOperation(kind)
             )
-            val owner = Root.newGlobalTaskOwner()
-            val created = Root.launch(context = owner, start = CoroutineStart.LAZY) {
+            val owner = globalExecution.newTaskOwner()
+            val created = globalExecution.launch(context = owner, start = CoroutineStart.LAZY) {
                 tracker.start()
                 try {
                     val result = if (lifecycle.accepts(session)) {
@@ -264,7 +277,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
                 } catch (exception: Throwable) {
                     tracker.fail()
                     val incidentId = UUID.randomUUID().toString().substring(0, 8)
-                    Root.INSTANCE.logger.log(
+                    host.logger.log(
                         Level.SEVERE,
                         "EternalScript project operation failed " +
                             "(incident=$incidentId, operation=${kind.name}).",
@@ -290,7 +303,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
                         lastUserOperation = snapshot
                     }
                 }
-                Root.closeGlobalTaskOwner(owner)
+                globalExecution.closeTaskOwner(owner)
                 drainEnvironmentRefresh()
             }
             createdOperation
@@ -308,7 +321,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
     }
 
     private fun registerServerLifecycle() {
-        Root.register(ServerLoadEvent::class, this, EventPriority.MONITOR) { event ->
+        server.registerEvent(ServerLoadEvent::class, this, EventPriority.MONITOR) { event ->
             val shouldLoad = synchronized(operationLock) {
                 initialLoad.onServerLoad(
                     reload = event.type == ServerLoadEvent.LoadType.RELOAD
@@ -316,51 +329,47 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
             }
             requestEnvironmentRefresh(
                 EnvironmentRefreshRequest(
-                    capture = ScriptEnvironmentCoordinator.capturePluginClasspath(),
+                    capture = environment.capturePluginClasspath(),
                     loadScripts = shouldLoad
                 )
             )
         }
-        Root.register(PluginEnableEvent::class, this, EventPriority.MONITOR) { event ->
-            if (event.plugin !== Root.INSTANCE) {
+        server.registerEvent(PluginEnableEvent::class, this, EventPriority.MONITOR) { event ->
+            if (event.plugin !== host.plugin) {
                 requestEnvironmentRefresh(
-                    EnvironmentRefreshRequest(ScriptEnvironmentCoordinator.capturePluginClasspath())
+                    EnvironmentRefreshRequest(environment.capturePluginClasspath())
                 )
             }
         }
-        Root.register(PluginDisableEvent::class, this, EventPriority.LOWEST) { event ->
-            if (event.plugin !== Root.INSTANCE) {
+        server.registerEvent(PluginDisableEvent::class, this, EventPriority.LOWEST) { event ->
+            if (event.plugin !== host.plugin) {
                 val pluginName = event.plugin.name
-                ScriptManager.invalidateEnvironment()
-                ScriptGenerationRegistry.invalidate(pluginName)
-                val frozen = ScriptManager.freezeForDisabledPlugin(pluginName)
+                scriptManager.invalidateEnvironment()
+                generationRegistry.invalidate(pluginName)
+                val frozen = scriptManager.freezeForDisabledPlugin(pluginName)
                 requestEnvironmentRefresh(
                     EnvironmentRefreshRequest(
-                        capture = ScriptEnvironmentCoordinator.capturePluginClasspath(excludedPlugin = event.plugin),
+                        capture = environment.capturePluginClasspath(excludedPlugin = event.plugin),
                         disabledPlugins = if (frozen) setOf(pluginName) else emptySet()
                     )
                 )
             }
         }
-        Root.INSTANCE.server.globalRegionScheduler.runDelayed(
-            Root.INSTANCE,
-            { _ ->
-                val shouldLoad = synchronized(operationLock) {
-                    initialLoad.onFallback(
-                        sessionOpen = lifecycle.openSession() != null
+        server.runGlobalDelayed(1L) {
+            val shouldLoad = synchronized(operationLock) {
+                initialLoad.onFallback(
+                    sessionOpen = lifecycle.openSession() != null
+                )
+            }
+            if (shouldLoad) {
+                requestEnvironmentRefresh(
+                    EnvironmentRefreshRequest(
+                        capture = environment.capturePluginClasspath(),
+                        loadScripts = true
                     )
-                }
-                if (shouldLoad) {
-                    requestEnvironmentRefresh(
-                        EnvironmentRefreshRequest(
-                            capture = ScriptEnvironmentCoordinator.capturePluginClasspath(),
-                            loadScripts = true
-                        )
-                    )
-                }
-            },
-            1L
-        )
+                )
+            }
+        }
     }
 
     private fun requestEnvironmentRefresh(request: EnvironmentRefreshRequest) {
@@ -387,7 +396,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
             } ?: return
 
             val started = startOperation(
-                feedback = UserFeedbackChannels.serverLog,
+                feedback = feedbackChannels.serverLog,
                 kind = ScriptOperationKind.ENVIRONMENT_REFRESH,
                 announceBusy = false
             ) { session ->
@@ -410,12 +419,12 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         val request = if (initialRequest.metadataApplied) {
             initialRequest
         } else {
-            val (_, workspace) = ScriptEnvironmentCoordinator.refreshClasspathAndWorkspace(initialRequest.capture)
+            val (_, workspace) = environment.refreshClasspathAndWorkspace(initialRequest.capture)
             if (initialRequest.loadScripts) {
                 mergeStartupWorkspace(workspace)
             } else {
                 emit(
-                    UserFeedbackChannels.serverLog,
+                    feedbackChannels.serverLog,
                     UserFeedbackEvent.WorkspaceMaintenance(workspace)
                 )
             }
@@ -424,11 +433,11 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         if (!lifecycle.accepts(session)) return false
 
         if (request.disabledPlugins.isNotEmpty()) {
-            val unloaded = ScriptManager.unloadForDisabledPlugins(
+            val unloaded = scriptManager.unloadForDisabledPlugins(
                 request.disabledPlugins
             )
             if (unloaded == null) {
-                Root.INSTANCE.logger.warning(
+                host.logger.warning(
                     "The script generation could not be unloaded after a plugin " +
                         "dependency was disabled. New script entries remain blocked; " +
                         "cleanup will retry."
@@ -447,7 +456,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         if (project == null) {
             recordAutomaticLoad(session, AutomaticProjectLoadState.EMPTY)
             emit(
-                UserFeedbackChannels.serverLog,
+                feedbackChannels.serverLog,
                 UserFeedbackEvent.StartupSummary(
                     workspace = takeStartupWorkspace(),
                     sourceCount = 0,
@@ -458,7 +467,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         }
         if (!lifecycle.accepts(session)) return false
 
-        val before = ScriptManager.generationSnapshot()
+        val before = scriptManager.generationSnapshot()
         recordAutomaticLoad(
             session,
             if (before.exists) {
@@ -467,7 +476,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
                 AutomaticProjectLoadState.FAILED_INACTIVE
             }
         )
-        val result = ScriptManager.load(project)
+        val result = scriptManager.load(project)
         val state = when (result.outcome) {
             ScriptProjectLoadOutcome.ACTIVATED -> AutomaticProjectLoadState.ACTIVATED
             ScriptProjectLoadOutcome.REJECTED_PREVIOUS_ACTIVE,
@@ -478,7 +487,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         }
         recordAutomaticLoad(session, state)
         emit(
-            UserFeedbackChannels.serverLog,
+            feedbackChannels.serverLog,
             UserFeedbackEvent.StartupSummary(
                 workspace = takeStartupWorkspace(),
                 sourceCount = project.files.size,
@@ -502,7 +511,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
     private fun takeStartupWorkspace(): WorkspaceUpdateResult =
         synchronized(operationLock) {
             startupWorkspace.also { startupWorkspace = null }
-        } ?: WorkspaceUpdateResult(status = WorkspaceManager.status())
+        } ?: WorkspaceUpdateResult(status = workspaceManager.status())
 
     private fun mergeStartupWorkspace(update: WorkspaceUpdateResult) {
         synchronized(operationLock) {
@@ -523,7 +532,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         }
     }
 
-    internal fun projectStatus(): ScriptProjectStatus {
+    override fun projectStatus(): ScriptProjectStatus {
         val operationState = synchronized(operationLock) {
             Triple(
                 operation?.tracker?.snapshot(),
@@ -533,7 +542,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         }
         val (currentOperation, previousUserOperation, lastAutomaticLoad) = operationState
         return ScriptProjectStatus(
-            generation = ScriptManager.generationSnapshot(),
+            generation = scriptManager.generationSnapshot(),
             availableSources = scriptRepository.paths().toSet(),
             currentUserOperation = currentOperation?.takeIf { snapshot ->
                 snapshot.operation.kind.userVisible
@@ -546,7 +555,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
 
     private fun environmentReady(): Boolean =
         synchronized(operationLock) { initialLoad.serverLoaded } &&
-            ScriptEnvironmentCoordinator.isReady()
+            environment.isReady()
 
     private fun requireEnvironment(feedback: UserFeedback): Boolean {
         if (environmentReady()) return true
@@ -558,7 +567,7 @@ object DataManager : PluginStartable, PluginStoppable, Listener {
         feedback: UserFeedback,
         event: UserFeedbackEvent
     ) {
-        Root.global {
+        globalExecution.global {
             feedback.emit(event)
         }
     }

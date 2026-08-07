@@ -1,7 +1,7 @@
 package eternalScript.core.manager
 
-import eternalScript.core.the.GlobalTaskQueue
-import eternalScript.core.the.GlobalTaskOwner
+import eternalScript.core.runtime.GlobalTaskQueue
+import eternalScript.core.runtime.GlobalTaskOwner
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

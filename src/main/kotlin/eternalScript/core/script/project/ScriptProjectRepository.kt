@@ -1,6 +1,6 @@
 package eternalScript.core.script.project
 
-import eternalScript.core.data.Resource
+import eternalScript.core.data.PluginPaths
 import eternalScript.core.extension.relativize
 import eternalScript.core.script.data.ScriptPrefix
 
@@ -67,15 +67,15 @@ internal class ScriptProjectRepository(
             .associateByTo(linkedMapOf(), ScriptProjectEntry::path)
 }
 
-internal fun runtimeScriptProjectRepository() = ScriptProjectRepository(discover = {
-    val sources = Resource.SCRIPTS.searchAllSequence(
+internal fun runtimeScriptProjectRepository(paths: PluginPaths) = ScriptProjectRepository(discover = {
+    val sources = paths.scripts.searchAllSequence(
         { file ->
-            isRuntimeScriptPath(file.relativize(Resource.SCRIPTS))
+            isRuntimeScriptPath(file.relativize(paths.scripts))
         },
         { directory -> !ScriptPrefix.IGNORE.check(directory) }
     ).map { file ->
         ScriptProjectEntry(
-            path = file.relativize(Resource.SCRIPTS),
+            path = file.relativize(paths.scripts),
             readText = file::readText
         )
     }
