@@ -6,11 +6,12 @@ plugins {
     kotlin("jvm")
 }
 
-val javaVersion = 25
-val minecraftVersion = "26.2"
-val paperBuild = "87-stable"
+val javaVersion = providers.gradleProperty("eternalScriptJavaVersion").get().toInt()
+val minecraftVersion = providers.gradleProperty("eternalScriptMinecraftVersion").get()
+val paperBuild = providers.gradleProperty("eternalScriptPaperBuild").get()
 val paperVersion = "$minecraftVersion.build.$paperBuild"
 val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
+val kotlinxVersion = providers.gradleProperty("eternalScriptKotlinxVersion").get()
 val projectJavaLauncher = javaToolchains.launcherFor {
     languageVersion.set(JavaLanguageVersion.of(javaVersion))
 }
@@ -31,7 +32,7 @@ repositories {
 
 dependencies {
     implementation(project(":eternalscript-api"))
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
     implementation("io.papermc.paper:paper-api:$paperVersion")
 
     scriptProjectTools(project(":"))

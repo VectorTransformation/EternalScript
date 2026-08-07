@@ -13,12 +13,13 @@ plugins {
 }
 
 group = "eternalScript"
-val pluginVersion = "2.0.0"
-val javaVersion = 25
+val pluginVersion = providers.gradleProperty("eternalScriptVersion").get()
+val javaVersion = providers.gradleProperty("eternalScriptJavaVersion").get().toInt()
 val pluginApiVersion = "26.2"
-val minecraftVersion = "26.2"
-val paperBuild = "87-stable"
+val minecraftVersion = providers.gradleProperty("eternalScriptMinecraftVersion").get()
+val paperBuild = providers.gradleProperty("eternalScriptPaperBuild").get()
 val paperVersion = "$minecraftVersion.build.$paperBuild"
+val kotlinxVersion = providers.gradleProperty("eternalScriptKotlinxVersion").get()
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -58,8 +59,8 @@ dependencies {
     paperweight.paperDevBundle(paperVersion)
     compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
     compileOnly(kotlin("reflect", kotlinVersion))
-    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinxVersion")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinxVersion")
     compileOnly(kotlin("scripting-common", kotlinVersion))
     compileOnly(kotlin("scripting-jvm", kotlinVersion))
     compileOnly(kotlin("compiler-embeddable", kotlinVersion))
@@ -68,14 +69,14 @@ dependencies {
     // Paper's Maven resolver does not use Gradle module variants. Declare the
     // JVM artifact directly so it wins over Kotlin compiler's older transitive
     // coroutines runtime.
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
     testImplementation(kotlin("test", kotlinVersion))
     testImplementation(kotlin("compiler-embeddable", kotlinVersion))
     testImplementation(kotlin("scripting-common", kotlinVersion))
     testImplementation(kotlin("scripting-jvm", kotlinVersion))
     testImplementation("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
     testImplementation("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
 }
 
 evaluationDependsOn(":eternalscript-api")
