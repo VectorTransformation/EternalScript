@@ -1,19 +1,12 @@
 package eternalScript.core.script.generation
 
 import eternalScript.core.script.data.ScriptExecutionGate
-import eternalScript.core.script.project.KotlinProjectBackend
-import eternalScript.core.script.project.ScriptProjectBackend
 import eternalScript.core.script.project.ScriptProjectSource
-import eternalScript.core.script.project.ScriptProjectRuntime
 import eternalScript.core.runtime.GlobalExecution
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Logger
-import kotlin.script.experimental.api.valueOrNull
 
 /**
  * Owns the transactional lifecycle of one active script generation.
@@ -21,30 +14,30 @@ import kotlin.script.experimental.api.valueOrNull
  * this coordinator controls epoch fences, ownership, activation, replacement,
  * rollback, and disposal.
  */
-internal class ScriptGenerationCoordinator(
-    private val backend: ScriptProjectBackend,
+internal class GenerationLifecycleEngine(
+    private val stager: GenerationStager,
     private val globalExecution: GlobalExecution,
     private val diagnostics: GenerationDiagnostics,
-    private val logger: Logger
+    private val logger: Logger,
+    private val state: GenerationStateStore,
+    private val retirement: GenerationRetirementService
 ) {
-    private val active = AtomicReference<ManagedProjectGeneration?>()
-    private val activeView = ActiveGenerationView(active::get)
-    private val lifecycle = GenerationCoordinatorLifecycle()
-    private val pendingCandidates = GenerationOwnershipRegistry<ManagedProjectGeneration>()
-    private val pendingRetirements = GenerationOwnershipRegistry<ManagedProjectGeneration>()
-    private val invalidatedGenerations = ConcurrentHashMap.newKeySet<ManagedProjectGeneration>()
-    private val environmentFence = ScriptEnvironmentFence()
+    private val active get() = state.active
+    private val activeView get() = state.activeView
+    private val pendingCandidates get() = state.pendingCandidates
+    private val pendingRetirements get() = state.pendingRetirements
+    private val invalidatedGenerations get() = state.invalidatedGenerations
 
     internal fun open() {
-        lifecycle.open()
+        state.open()
     }
 
     internal fun close() {
-        lifecycle.close()
+        state.close()
     }
 
     internal fun invalidateEnvironment() {
-        environmentFence.invalidate()
+        state.invalidateEnvironment()
     }
 
     fun stop() {
@@ -55,62 +48,20 @@ internal class ScriptGenerationCoordinator(
         if (current == null && candidates.isEmpty() && retirements.isEmpty()) return
         val report = MutableScriptProjectReport(logSummaries = true)
         runBlocking {
-            current?.let { shutdownGeneration(it, report) }
+            current?.let { retirement.shutdown(it, report) }
             candidates.forEach { candidate ->
-                shutdownGeneration(candidate, report)
+                retirement.shutdown(candidate, report)
             }
             retirements.forEach { retirement ->
-                shutdownGeneration(retirement, report)
+                this@GenerationLifecycleEngine.retirement.shutdown(retirement, report)
             }
         }
     }
 
-    private fun openEpoch(): Long? = lifecycle.openEpoch()
+    private fun openEpoch(): Long? = state.openEpoch()
 
     private fun isOpen(epoch: Long): Boolean =
-        lifecycle.accepts(epoch)
-
-    private suspend fun shutdownGeneration(
-        current: ManagedProjectGeneration,
-        report: MutableScriptProjectReport
-    ) {
-        val frozen = current.runtime.tryFreeze()
-        val callbacksDrained = if (
-            frozen ||
-            current.runtime.state == ScriptExecutionGate.State.SWAPPING
-        ) {
-            awaitDrain(current.runtime, GENERATION_SHUTDOWN_DRAIN_ATTEMPTS)
-        } else {
-            current.runtime.isDrained
-        }
-        val trackedWorkDrained = current.runtime.cancelTrackedWorkAndJoin(
-            TRACKED_WORK_SHUTDOWN_TIMEOUT_MILLIS
-        )
-        if (!callbacksDrained || !trackedWorkDrained) {
-            logger.warning(
-                "Script generation shutdown exceeded its drain deadline " +
-                    "(callbacks=$callbacksDrained, trackedWork=$trackedWorkDrained); " +
-                    "forced cleanup will continue because the plugin is disabling."
-            )
-        }
-
-        current.runtime.retire()
-        try {
-            current.runtime.deactivate()
-        } catch (exception: Throwable) {
-            diagnostics.lifecycleFailure(
-                current.project,
-                ScriptLifecycleFailurePhase.DISABLE,
-                "shutdown disable",
-                exception,
-                report
-            )
-        } finally {
-            dispose(current, "shutdown cleanup", report)
-        }
-    }
-
-    private fun compile(project: ScriptProjectSource) = backend.compile(project)
+        state.lifecycle.accepts(epoch)
 
     internal suspend fun load(project: ScriptProjectSource): ScriptProjectLoadResult {
         val expected = active.get()
@@ -140,60 +91,22 @@ internal class ScriptGenerationCoordinator(
     ): Boolean {
         val epoch = openEpoch() ?: return false
         if (expected != null && !expected.runtime.isActive) return false
-        val environment = environmentFence.snapshot()
-        val compilation = compile(project)
-        val compiled = compilation.valueOrNull()
-
-        diagnostics.report(
-            project,
-            compilation,
-            GenerationDiagnosticPhase.COMPILATION,
-            report
-        )
+        val environment = state.environmentEpoch()
+        val compiled = stager.compile(project, report)
 
         if (!canCommit(epoch, environment) || active.get() !== expected) return false
         if (compiled == null) return false
 
         return withContext(NonCancellable) {
-            val replacement = globalExecution.global stage@{
-                if (!canCommit(epoch, environment) || active.get() !== expected) return@stage null
-                val evaluation = backend.evaluate(compiled)
-                diagnostics.report(
-                    project,
-                    evaluation,
-                    GenerationDiagnosticPhase.EVALUATION,
-                    report
-                )
-
-                val runtime = evaluation.valueOrNull()?.returnValue?.scriptInstance
-                    as? ScriptProjectRuntime
-                    ?: return@stage null
-                var data: ScriptGeneration? = null
-                data = try {
-                    runtime.transfer().also { generation ->
-                        generation.mapRuntimeExceptions(project)
-                    }
-                } catch (exception: Throwable) {
-                    runCatching {
-                        data?.dispose() ?: runtime.close()
-                    }
-                        .exceptionOrNull()
-                        ?.let(exception::addSuppressed)
-                    throw exception
-                }
-                try {
-                    ManagedProjectGeneration(project, data).also { candidate ->
-                        check(pendingCandidates.transfer(candidate)) {
-                            "The staged script candidate already has an owner."
-                        }
-                    }
-                } catch (exception: Throwable) {
-                    runCatching(data::dispose)
-                        .exceptionOrNull()
-                        ?.let(exception::addSuppressed)
-                    throw exception
-                }
-            } ?: return@withContext false
+            val replacement = stager.stage(
+                project = project,
+                compiled = compiled,
+                report = report,
+                canStage = {
+                    canCommit(epoch, environment) && active.get() === expected
+                },
+                takeOwnership = pendingCandidates::transfer
+            ) ?: return@withContext false
 
             if (!canCommit(epoch, environment) || active.get() !== expected) {
                 globalExecution.global {
@@ -355,7 +268,7 @@ internal class ScriptGenerationCoordinator(
 
         var ownsFrozenGeneration = true
         try {
-            if (awaitDrain(generation.runtime, GENERATION_FREEZE_ATTEMPTS)) {
+            if (retirement.awaitDrain(generation.runtime, GENERATION_FREEZE_ATTEMPTS)) {
                 ownsFrozenGeneration = false
                 return true
             }
@@ -370,19 +283,6 @@ internal class ScriptGenerationCoordinator(
                 generation.runtime.restore()
             }
         }
-    }
-
-    private suspend fun awaitDrain(
-        scriptData: ScriptGeneration,
-        attempts: Int
-    ): Boolean {
-        repeat(attempts) {
-            if (scriptData.isDrained) {
-                return true
-            }
-            delay(GENERATION_FREEZE_RETRY_MILLIS)
-        }
-        return scriptData.isDrained
     }
 
     private suspend fun replaceFrozen(
@@ -474,32 +374,15 @@ internal class ScriptGenerationCoordinator(
             return false
         }
 
+        val transaction = GenerationSwapTransaction(state, current, replacement)
         val published = try {
             globalExecution.global {
-                if (
-                    !canCommit(epoch, environment) ||
-                    !active.compareAndSet(current, replacement)
-                ) {
-                    false
-                } else if (
-                    !canCommit(epoch, environment) ||
-                    !replacement.runtime.publish()
-                ) {
-                    active.compareAndSet(replacement, current)
-                    false
-                } else {
-                    check(pendingRetirements.transfer(current)) {
-                        "The previous script generation already has a retirement owner."
-                    }
-                    check(pendingCandidates.claim(replacement)) {
-                        "The published script candidate lost transaction ownership."
-                    }
-                    true
+                transaction.publish {
+                    canCommit(epoch, environment)
                 }
             }
         } catch (exception: Throwable) {
-            active.compareAndSet(replacement, current)
-            pendingRetirements.claim(current)
+            transaction.rollbackPublication()
             globalExecution.global {
                 diagnostics.lifecycleFailure(
                     replacement.project,
@@ -519,9 +402,9 @@ internal class ScriptGenerationCoordinator(
         }
 
         globalExecution.global {
-            if (!pendingRetirements.claim(current)) return@global
+            if (!transaction.claimRetirement()) return@global
             current.runtime.retire()
-            dispose(current, "retire cleanup", report)
+            retirement.dispose(current, "retire cleanup", report)
         }
         return true
     }
@@ -539,7 +422,7 @@ internal class ScriptGenerationCoordinator(
                 if (generation in invalidatedGenerations) return@global false
                 if (!isOpen(epoch) || active.get() !== generation) {
                     generation.runtime.retire()
-                    dispose(generation, "restore cleanup", report)
+                    retirement.dispose(generation, "restore cleanup", report)
                     active.compareAndSet(generation, null)
                     return@global false
                 }
@@ -599,7 +482,7 @@ internal class ScriptGenerationCoordinator(
                     exception,
                     report
                 )
-                dispose(generation, "restore cleanup", report)
+                retirement.dispose(generation, "restore cleanup", report)
                 active.compareAndSet(generation, null)
             }
             false
@@ -607,7 +490,7 @@ internal class ScriptGenerationCoordinator(
     }
 
     private fun canCommit(epoch: Long, environment: Long): Boolean =
-        isOpen(epoch) && environmentFence.accepts(environment)
+        state.accepts(epoch, environment)
 
     private suspend fun cleanupFailedActivation(
         generation: ManagedProjectGeneration,
@@ -648,7 +531,7 @@ internal class ScriptGenerationCoordinator(
                     report
                 )
             } finally {
-                dispose(generation, "failed activation cleanup", report)
+                retirement.dispose(generation, "failed activation cleanup", report)
             }
         }
     }
@@ -659,40 +542,14 @@ internal class ScriptGenerationCoordinator(
     ) {
         if (!pendingCandidates.claim(generation)) return
         generation.runtime.retire()
-        dispose(generation, "discard cleanup", report)
-    }
-
-    private fun dispose(
-        generation: ManagedProjectGeneration,
-        technicalPhase: String,
-        report: MutableScriptProjectReport
-    ) {
-        try {
-            generation.runtime.dispose()
-        } catch (exception: Throwable) {
-            diagnostics.lifecycleFailure(
-                generation.project,
-                ScriptLifecycleFailurePhase.CLEANUP,
-                technicalPhase,
-                exception,
-                report
-            )
-        } finally {
-            invalidatedGenerations.remove(generation)
-        }
+        retirement.dispose(generation, "discard cleanup", report)
     }
 
     internal suspend fun check(project: ScriptProjectSource): ScriptProjectCheckResult {
-        val result = compile(project)
         val report = MutableScriptProjectReport()
-        diagnostics.report(
-            project,
-            result,
-            GenerationDiagnosticPhase.COMPILATION,
-            report
-        )
+        val compiled = stager.compile(project, report)
         return ScriptProjectCheckResult(
-            outcome = if (result.valueOrNull() != null) {
+            outcome = if (compiled != null) {
                 ScriptProjectCheckOutcome.PASSED
             } else {
                 ScriptProjectCheckOutcome.FAILED
@@ -730,7 +587,7 @@ internal class ScriptGenerationCoordinator(
             val frozen = when (clearPreparation(current.runtime.state)) {
                 FrozenGenerationClearPreparation.FREEZE -> freeze(current, epoch)
                 FrozenGenerationClearPreparation.RETRY_DRAIN ->
-                    awaitDrain(current.runtime, GENERATION_FREEZE_ATTEMPTS)
+                    retirement.awaitDrain(current.runtime, GENERATION_FREEZE_ATTEMPTS)
                 FrozenGenerationClearPreparation.REJECT -> false
             }
             if (!frozen) return null
@@ -810,7 +667,7 @@ internal class ScriptGenerationCoordinator(
             return null
         }
 
-        val callbacksDrained = awaitDrain(
+        val callbacksDrained = retirement.awaitDrain(
             current.runtime,
             GENERATION_SHUTDOWN_DRAIN_ATTEMPTS
         )
@@ -854,7 +711,7 @@ internal class ScriptGenerationCoordinator(
                 report
             )
         } finally {
-            dispose(current, "unload cleanup", report)
+            retirement.dispose(current, "unload cleanup", report)
             active.compareAndSet(current, null)
             current.runtime.retire()
         }
@@ -864,11 +721,6 @@ internal class ScriptGenerationCoordinator(
     internal fun generationSnapshot(): ScriptProjectGenerationSnapshot = activeView.snapshot()
 }
 
-private const val GENERATION_FREEZE_ATTEMPTS = 50
-private const val GENERATION_SHUTDOWN_DRAIN_ATTEMPTS = 1_000
-private const val GENERATION_FREEZE_RETRY_MILLIS = 10L
-private const val TRACKED_WORK_DRAIN_TIMEOUT_MILLIS = 2_000L
-private const val TRACKED_WORK_SHUTDOWN_TIMEOUT_MILLIS = 10_000L
 
 internal enum class FrozenGenerationAbortAction {
     RESTORE,

@@ -17,6 +17,10 @@ import eternalScript.core.script.definition.ScriptCompilationCache
 import eternalScript.core.script.definition.libraryClasspath
 import eternalScript.core.script.definition.scriptRuntimeClasspath
 import eternalScript.core.script.generation.GenerationDiagnostics
+import eternalScript.core.script.generation.GenerationStager
+import eternalScript.core.script.generation.GenerationStateStore
+import eternalScript.core.script.generation.GenerationRetirementService
+import eternalScript.core.script.generation.GenerationLifecycleEngine
 import eternalScript.core.script.generation.ScriptGenerationCoordinator
 import eternalScript.core.script.project.KotlinProjectBackend
 import eternalScript.core.script.project.ScriptGenerationEvaluator
@@ -65,12 +69,26 @@ internal class PluginRuntime(plugin: EternalScript) {
         evaluator = evaluator
     )
     private val diagnostics = GenerationDiagnostics(config, host.logger)
-    private val generationCoordinator = ScriptGenerationCoordinator(
+    private val generationStager = GenerationStager(
         backend,
         globalExecution,
+        diagnostics
+    )
+    private val generationState = GenerationStateStore()
+    private val generationRetirement = GenerationRetirementService(
+        generationState,
         diagnostics,
         host.logger
     )
+    private val generationEngine = GenerationLifecycleEngine(
+        generationStager,
+        globalExecution,
+        diagnostics,
+        host.logger,
+        generationState,
+        generationRetirement
+    )
+    private val generationCoordinator = ScriptGenerationCoordinator(generationEngine)
     private val scriptManager = ScriptManager(generationCoordinator)
     private val dataManager = DataManager(
         host,
