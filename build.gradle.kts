@@ -3,13 +3,13 @@ import java.util.jar.JarFile
 plugins {
     `java-library`
     // https://kotlinlang.org/docs/releases.html
-    kotlin("jvm")
+    alias(libs.plugins.kotlin.jvm)
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
+    alias(libs.plugins.paperweight.userdev)
     // https://github.com/jpenilla/run-task
-    id("xyz.jpenilla.run-paper") version "3.0.2"
+    alias(libs.plugins.run.paper)
     // https://github.com/jpenilla/resource-factory
-    id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.1"
+    alias(libs.plugins.resource.factory.paper)
 }
 
 group = "eternalScript"
@@ -19,7 +19,6 @@ val pluginApiVersion = "26.2"
 val minecraftVersion = providers.gradleProperty("eternalScriptMinecraftVersion").get()
 val paperBuild = providers.gradleProperty("eternalScriptPaperBuild").get()
 val paperVersion = "$minecraftVersion.build.$paperBuild"
-val kotlinxVersion = providers.gradleProperty("eternalScriptKotlinxVersion").get()
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -45,9 +44,17 @@ val minecraftArgs = listOf(
     "-Dusing.aikars.flags=https://mcflags.emc.gs",
     "-Daikars.new.flags=true"
 )
-val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
 val projectJavaLauncher = javaToolchains.launcherFor {
     languageVersion.set(JavaLanguageVersion.of(javaVersion))
+}
+
+allprojects {
+    dependencyLocking {
+        lockAllConfigurations()
+        ignoredDependencies.add("com.velocitypowered:velocity-native")
+        ignoredDependencies.add("io.papermc.codebook:codebook-cli")
+        ignoredDependencies.add("me.lucko:spark-api")
+    }
 }
 
 repositories {
@@ -57,26 +64,26 @@ repositories {
 dependencies {
     implementation(project(":eternalscript-api"))
     paperweight.paperDevBundle(paperVersion)
-    compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
-    compileOnly(kotlin("reflect", kotlinVersion))
-    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinxVersion")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinxVersion")
-    compileOnly(kotlin("scripting-common", kotlinVersion))
-    compileOnly(kotlin("scripting-jvm", kotlinVersion))
-    compileOnly(kotlin("compiler-embeddable", kotlinVersion))
-    compileOnly("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
-    compileOnly("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
+    compileOnly(libs.kotlin.stdlib.jdk8)
+    compileOnly(libs.kotlin.reflect)
+    compileOnly(libs.kotlinx.serialization.json)
+    testImplementation(libs.kotlinx.serialization.json)
+    compileOnly(libs.kotlin.scripting.common)
+    compileOnly(libs.kotlin.scripting.jvm)
+    compileOnly(libs.kotlin.compiler.embeddable)
+    compileOnly(libs.kotlin.build.tools.api)
+    compileOnly(libs.kotlin.build.tools.impl)
     // Paper's Maven resolver does not use Gradle module variants. Declare the
     // JVM artifact directly so it wins over Kotlin compiler's older transitive
     // coroutines runtime.
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
-    testImplementation(kotlin("test", kotlinVersion))
-    testImplementation(kotlin("compiler-embeddable", kotlinVersion))
-    testImplementation(kotlin("scripting-common", kotlinVersion))
-    testImplementation(kotlin("scripting-jvm", kotlinVersion))
-    testImplementation("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
-    testImplementation("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
+    compileOnly(libs.kotlinx.coroutines.core.jvm)
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.kotlin.compiler.embeddable)
+    testImplementation(libs.kotlin.scripting.common)
+    testImplementation(libs.kotlin.scripting.jvm)
+    testImplementation(libs.kotlin.build.tools.api)
+    testImplementation(libs.kotlin.build.tools.impl)
+    testImplementation(libs.kotlinx.coroutines.core.jvm)
 }
 
 evaluationDependsOn(":eternalscript-api")
@@ -118,9 +125,107 @@ tasks {
         description = "Checks the workspace and bundled reloadable Kotlin projects without evaluating them."
         dependsOn(":script-workspace:checkScripts")
     }
+    register("verifyDependencyGovernance") {
+        group = "verification"
+        description = "Verifies version catalog, dependency locks, and checksum metadata boundaries."
+
+        val catalogFile = project.file("gradle/libs.versions.toml")
+        val propertiesFile = project.file("gradle.properties")
+        val buildScripts = listOf(
+            project.file("build.gradle.kts"),
+            project.file("eternalscript-api/build.gradle.kts"),
+            project.file("script-workspace/build.gradle.kts")
+        )
+        val lockFiles = listOf(
+            project.file("gradle.lockfile"),
+            project.file("eternalscript-api/gradle.lockfile"),
+            project.file("script-workspace/gradle.lockfile"),
+            project.file("settings-gradle.lockfile")
+        )
+        val verificationFile = project.file("gradle/verification-metadata.xml")
+
+        inputs.files(listOf(catalogFile, propertiesFile, verificationFile) + buildScripts + lockFiles)
+
+        doLast {
+            val catalog = catalogFile.readText()
+            listOf(
+                "[versions]",
+                "[libraries]",
+                "[plugins]",
+                "kotlinx-coroutines-core-jvm",
+                "kotlinx-serialization-json",
+                "paperweight-userdev",
+                "resource-factory-paper"
+            ).forEach { required ->
+                check(required in catalog) {
+                    "Missing dependency catalog entry: $required"
+                }
+            }
+
+            val properties = propertiesFile.readText()
+            listOf(
+                "eternalScriptVersion=",
+                "eternalScriptJavaVersion=",
+                "eternalScriptMinecraftVersion=",
+                "eternalScriptPaperBuild="
+            ).forEach { required ->
+                check(required in properties) {
+                    "Missing project platform version property: $required"
+                }
+            }
+            check("kotlinVersion=" !in properties && "eternalScriptKotlinxVersion=" !in properties) {
+                "External dependency versions must be declared in gradle/libs.versions.toml."
+            }
+
+            val forbiddenInlineDeclarations = listOf(
+                "org.jetbrains." + "kotlinx:",
+                "org.jetbrains.kotlin:" + "kotlin-",
+                "id(\"io.papermc." + "paperweight.userdev\") version",
+                "id(\"xyz.jpenilla." + "run-paper\") version",
+                "id(\"xyz.jpenilla." + "resource-factory-paper-convention\") version"
+            )
+            val inlineDeclarations = buildScripts.flatMap { script ->
+                forbiddenInlineDeclarations.filter { declaration -> declaration in script.readText() }
+                    .map { declaration -> "${script.path}:$declaration" }
+            }
+            check(inlineDeclarations.isEmpty()) {
+                "External versions must use the version catalog: ${inlineDeclarations.joinToString()}"
+            }
+
+            lockFiles.forEach { lockFile ->
+                check(lockFile.isFile && lockFile.length() > 0L) {
+                    "Missing dependency lock state: ${lockFile.path}"
+                }
+                check("SNAPSHOT" !in lockFile.readText()) {
+                    "Changing dependencies must not be persisted in lock state: ${lockFile.path}"
+                }
+            }
+
+            val verification = verificationFile.readText()
+            check("<verify-metadata>true</verify-metadata>" in verification) {
+                "Dependency metadata verification must remain enabled."
+            }
+            check(Regex("<sha256 value=").findAll(verification).count() > 0) {
+                "Dependency verification metadata does not contain SHA-256 entries."
+            }
+            check(Regex("<trust ").findAll(verification).count() == 3) {
+                "Only the three documented changing Paper/Paperweight artifacts may bypass checksums."
+            }
+            listOf(
+                "com.velocitypowered\" name=\"velocity-native",
+                "io.papermc.codebook\" name=\"codebook-cli",
+                "me.lucko\" name=\"spark-api"
+            ).forEach { trusted ->
+                check(trusted in verification) {
+                    "Missing documented changing-artifact exception: $trusted"
+                }
+            }
+        }
+    }
     check {
         dependsOn("checkScripts")
         dependsOn("verifyApiArchitecture")
+        dependsOn("verifyDependencyGovernance")
     }
     processResources {
         doLast {

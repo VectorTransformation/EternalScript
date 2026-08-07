@@ -3,15 +3,13 @@ import org.gradle.api.tasks.PathSensitivity
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
-    kotlin("jvm")
+    alias(libs.plugins.kotlin.jvm)
 }
 
 val javaVersion = providers.gradleProperty("eternalScriptJavaVersion").get().toInt()
 val minecraftVersion = providers.gradleProperty("eternalScriptMinecraftVersion").get()
 val paperBuild = providers.gradleProperty("eternalScriptPaperBuild").get()
 val paperVersion = "$minecraftVersion.build.$paperBuild"
-val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
-val kotlinxVersion = providers.gradleProperty("eternalScriptKotlinxVersion").get()
 val projectJavaLauncher = javaToolchains.launcherFor {
     languageVersion.set(JavaLanguageVersion.of(javaVersion))
 }
@@ -32,14 +30,14 @@ repositories {
 
 dependencies {
     implementation(project(":eternalscript-api"))
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
+    implementation(libs.kotlinx.coroutines.core.jvm)
     implementation("io.papermc.paper:paper-api:$paperVersion")
 
     scriptProjectTools(project(":"))
-    scriptProjectTools(kotlin("compiler-embeddable", kotlinVersion))
-    scriptProjectTools(kotlin("reflect", kotlinVersion))
-    scriptProjectTools("org.jetbrains.kotlin:kotlin-build-tools-api:$kotlinVersion")
-    scriptProjectTools("org.jetbrains.kotlin:kotlin-build-tools-impl:$kotlinVersion")
+    scriptProjectTools(libs.kotlin.compiler.embeddable)
+    scriptProjectTools(libs.kotlin.reflect)
+    scriptProjectTools(libs.kotlin.build.tools.api)
+    scriptProjectTools(libs.kotlin.build.tools.impl)
 }
 
 kotlin {

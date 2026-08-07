@@ -1,6 +1,6 @@
 plugins {
     `java-library`
-    kotlin("jvm")
+    alias(libs.plugins.kotlin.jvm)
 }
 
 group = "eternalScript"
@@ -10,7 +10,6 @@ val javaVersion = providers.gradleProperty("eternalScriptJavaVersion").get().toI
 val minecraftVersion = providers.gradleProperty("eternalScriptMinecraftVersion").get()
 val paperBuild = providers.gradleProperty("eternalScriptPaperBuild").get()
 val paperVersion = "$minecraftVersion.build.$paperBuild"
-val kotlinxVersion = providers.gradleProperty("eternalScriptKotlinxVersion").get()
 
 repositories {
     mavenCentral()
@@ -19,11 +18,11 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:$paperVersion")
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
+    compileOnly(libs.kotlinx.coroutines.core.jvm)
 
-    testImplementation(kotlin("test"))
+    testImplementation(libs.kotlin.test)
     testImplementation("io.papermc.paper:paper-api:$paperVersion")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:$kotlinxVersion")
+    testImplementation(libs.kotlinx.coroutines.core.jvm)
 }
 
 kotlin {

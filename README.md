@@ -253,6 +253,26 @@ built in `eternalscript-api/build/libs/` for tooling and compile-only consumers.
 Server installation still uses only the plugin JAR from `build/libs/`; that JAR
 embeds the API classes exactly once.
 
+Project and runtime targets such as the EternalScript, Java, Minecraft, and
+Paper build versions are declared in `gradle.properties`. External library and
+project-plugin versions are declared in `gradle/libs.versions.toml`. Resolved
+transitive versions are committed in each project's `gradle.lockfile`, while
+`gradle/verification-metadata.xml` verifies downloaded artifacts with SHA-256.
+
+After intentionally changing dependency versions, regenerate and review both
+forms of state before running the full check:
+
+```powershell
+.\gradlew.bat dependencies :eternalscript-api:dependencies :script-workspace:dependencies --write-locks
+.\gradlew.bat clean test check verifyApiArchitecture :script-workspace:check --write-verification-metadata sha256
+```
+
+Paper and Paperweight currently expose three changing `SNAPSHOT` artifacts.
+Those exact modules are excluded from locking and explicitly documented as
+trusted checksum exceptions; every stable external artifact remains locked and
+checksum-verified. `verifyDependencyGovernance` prevents that exception list
+from expanding silently.
+
 ## License
 
 EternalScript is available under the [MIT License](LICENSE).
