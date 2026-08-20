@@ -1,7 +1,10 @@
 /.gradle/
 /.idea/
 /.kotlin/
-/gradlew
-/gradlew.bat
+/.intellijPlatform/
 /build/
+**/build/
 /run/
+/logs/
+/.codegraph/
+/codex/temp/

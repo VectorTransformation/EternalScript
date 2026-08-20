@@ -1,22 +1,40 @@
+import org.gradle.api.tasks.WriteProperties
+import xyz.jpenilla.resourcefactory.bukkit.Permission
+
 plugins {
     `java-library`
+    id("com.gradleup.shadow") version "9.6.1"
     // https://kotlinlang.org/docs/releases.html
     kotlin("jvm")
     // https://github.com/Kotlin/kotlinx.serialization
     kotlin("plugin.serialization")
     // https://plugins.gradle.org/plugin/io.papermc.paperweight.userdev
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
     // https://github.com/jpenilla/run-task
-    id("xyz.jpenilla.run-paper") version "3.0.2"
+    id("xyz.jpenilla.run-paper") version "3.1.0"
     // https://github.com/jpenilla/resource-factory
     id("xyz.jpenilla.resource-factory-paper-convention") version "1.3.1"
 }
 
-group = "eternalScript"
-val pluginVersion = "1.0.8"
-val javaVersion = 21
-val pluginApiVersion = "1.21.8"
-val minecraftVersion = "1.21.11"
+group = "eternalscript"
+val pluginVersion = "2.1.2"
+val javaVersion = 25
+val pluginApiVersion = "26.2"
+val minecraftVersion = "26.2"
+val paperBuild = "112-stable"
+val paperVersion = "$minecraftVersion.build.$paperBuild"
+val managementPermissionActions = listOf(
+    "help",
+    "reload",
+    "compile",
+    "load",
+    "unload",
+    "clear",
+    "config",
+    "list",
+    "status"
+)
+project.version = pluginVersion
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -42,58 +60,76 @@ val minecraftArgs = listOf(
     "-Dusing.aikars.flags=https://mcflags.emc.gs",
     "-Daikars.new.flags=true"
 )
-val kotlinVersion: String by project
+val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
+val runtimeLibraries = listOf(
+    "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-compiler-embeddable:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-script-runtime:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-scripting-common:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable:$kotlinVersion",
+    "org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0",
+    "org.jetbrains.kotlin:kotlin-scripting-jvm:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-scripting-jvm-host:$kotlinVersion",
+    "org.jetbrains.kotlin:kotlin-metadata-jvm:$kotlinVersion",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0"
+)
+val projectJavaLauncher = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(javaVersion))
+}
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    paperweight.paperDevBundle("$minecraftVersion-R0.1-SNAPSHOT")
-    compileOnly(kotlin("stdlib-jdk8", kotlinVersion))
-    compileOnly(kotlin("reflect", kotlinVersion))
-    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
-    compileOnly(kotlin("scripting-jvm", kotlinVersion))
-    compileOnly(kotlin("scripting-jvm-host", kotlinVersion))
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation(project(":ide-protocol"))
+    paperweight.paperDevBundle(paperVersion)
+    runtimeLibraries.forEach { coordinate -> compileOnly(coordinate) }
+    implementation("org.bstats:bstats-bukkit:3.2.1")
+    testImplementation(kotlin("test", kotlinVersion))
+    testImplementation(kotlin("compiler-embeddable", kotlinVersion))
+    testImplementation(kotlin("script-runtime", kotlinVersion))
+    testImplementation(kotlin("scripting-common", kotlinVersion))
+    testImplementation(kotlin("scripting-compiler-embeddable", kotlinVersion))
+    testImplementation(kotlin("scripting-jvm", kotlinVersion))
+    testImplementation(kotlin("scripting-jvm-host", kotlinVersion))
+    testImplementation("org.jetbrains.kotlin:kotlin-metadata-jvm:$kotlinVersion")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
 }
 
-fun libraries(): String {
-    val compileOnly = project.configurations.getByName("compileOnly").dependencies
-
-    val library = compileOnly.mapNotNull { dependency ->
-        val group = dependency.group ?: return@mapNotNull null
-        val name = dependency.name
-        val version = dependency.version ?: return@mapNotNull null
-
-        "  - $group:$name:$version"
-    }.joinToString("\n", "\n")
-
-    return "libraries:$library"
-}
-
-fun addLibraries() {
-    val paperPluginYml = layout.buildDirectory.file("resources/main/paper-plugin.yml").get().asFile
-    if (!paperPluginYml.exists()) return
-
-    paperPluginYml.writeText(paperPluginYml.readText().plus(libraries()))
+val generateRuntimeLibraries = tasks.register<WriteProperties>("generateRuntimeLibraries") {
+    destinationFile.set(
+        layout.buildDirectory.file(
+            "generated/eternalscript/eternalscript-runtime-libraries.properties"
+        )
+    )
+    encoding = "UTF-8"
+    lineSeparator = "\n"
+    comment = "Generated by the EternalScript build; do not edit."
+    property("libraries", runtimeLibraries.joinToString(","))
 }
 
 tasks {
     runServer {
         minecraftVersion(minecraftVersion)
+        javaLauncher.set(projectJavaLauncher)
         jvmArgs(minecraftArgs)
     }
     processResources {
-        doLast {
-            addLibraries()
-        }
+        from(generateRuntimeLibraries)
     }
     compileJava {
         options.release = javaVersion
     }
     jar {
-        version = pluginVersion()
+        archiveClassifier.set("plain")
+    }
+    shadowJar {
+        archiveClassifier.set("")
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+        relocate("org.bstats", "eternalscript.libs.bstats")
     }
 }
 
@@ -102,18 +138,29 @@ java {
 }
 
 kotlin {
+    explicitApi()
     jvmToolchain(javaVersion)
 }
 
 paperPluginYaml {
     name = rootProject.name
     main = pluginMain()
-    version = pluginVersion()
+    version = pluginVersion
     apiVersion = pluginApiVersion
     loader = "${pluginMain()}Loader"
-    foliaSupported = true
+    permissions.register("eternalscript.admin") {
+        description = "Allows every EternalScript management command"
+        default = Permission.Default.OP
+        children(*managementPermissionActions.map { action ->
+            "eternalscript.command.$action"
+        }.toTypedArray())
+    }
+    managementPermissionActions.forEach { action ->
+        permissions.register("eternalscript.command.$action") {
+            description = "Allows /es $action"
+            default = Permission.Default.FALSE
+        }
+    }
 }
 
 fun pluginMain() = "$group.${rootProject.name}"
-
-fun pluginVersion() = pluginVersion.let { it.ifEmpty { "1.0.0" } }

@@ -1,0 +1,46 @@
+<idea-plugin>
+    <id>io.github.vectortransformation.eternalscript</id>
+    <name>EternalScript</name>
+    <vendor url="https://github.com/VectorTransformation/EternalScript">VectorTransformation</vendor>
+    <description><![CDATA[
+        Source-native IntelliJ support for EternalScript .eternal.kts scripts.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>org.jetbrains.kotlin</depends>
+
+    <resource-bundle>messages.EternalScriptBundle</resource-bundle>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectService serviceImplementation="eternalscript.intellij.model.EternalScriptProjectService"/>
+        <postStartupActivity implementation="eternalscript.intellij.startup.EternalScriptStartupActivity"/>
+        <renamePsiElementProcessor implementation="eternalscript.intellij.refactoring.EternalScriptRenameProcessor"/>
+        <referencesSearch implementation="eternalscript.intellij.refactoring.EternalScriptReferencesSearchExecutor"/>
+        <annotator language="kotlin" implementationClass="eternalscript.intellij.diagnostics.EternalScriptConflictAnnotator"/>
+        <notificationGroup id="EternalScript" displayType="BALLOON" isLogByDefault="true"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK1="false" supportsK2="true"/>
+        <scriptDefinitionsProvider implementation="eternalscript.intellij.scripting.EternalScriptDefinitionsProvider"/>
+        <kaResolveExtensionProvider implementation="eternalscript.intellij.resolve.Idea262ResolveExtensionProvider"/>
+    </extensions>
+
+    <actions>
+        <group id="EternalScript.Tools" text="EternalScript" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="EternalScript.ReloadEnvironment"
+                    class="eternalscript.intellij.actions.ReloadEternalScriptEnvironmentAction"/>
+            <separator/>
+            <action id="EternalScript.OpenManifest"
+                    class="eternalscript.intellij.actions.OpenEternalScriptManifestAction"/>
+            <action id="EternalScript.OpenScriptRoot"
+                    class="eternalscript.intellij.actions.OpenEternalScriptRootAction"/>
+            <separator/>
+            <action id="EternalScript.CopyDiagnostics"
+                    class="eternalscript.intellij.actions.CopyEternalScriptDiagnosticsAction"/>
+        </group>
+    </actions>
+</idea-plugin>
