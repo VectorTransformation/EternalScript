@@ -13,7 +13,7 @@ final class ApiJavaCompilationProbe {
         ScriptEngineState state = snapshot.getState();
         int version = EternalScriptApi.API_VERSION;
         if (state == ScriptEngineState.DISABLED || version < 1) {
-            return api.clear();
+            return api.cancel();
         }
         return api.reload().thenApply(result -> {
             ScriptOperationStatus status = result.getStatus();

@@ -7,26 +7,12 @@ import eternalscript.ide.protocol.IdeEnvironment
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
-import org.jetbrains.kotlin.psi.KtImportDirective
-import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import java.nio.file.Path
 
 internal data class EternalScriptSourceLocation(
     val fileUrl: String,
     val offset: Int
 )
-
-internal sealed interface EternalScriptConflict {
-    data class DuplicateDeclaration(
-        val name: String,
-        val paths: List<String>
-    ) : EternalScriptConflict
-
-    data class ConflictingImport(
-        val name: String,
-        val imports: List<String>
-    ) : EternalScriptConflict
-}
 
 internal data class EternalScriptGeneratedMapping(
     val range: TextRange,
@@ -42,13 +28,6 @@ internal data class EternalScriptGeneratedFile(
     val topLevelClassifierNames: Set<Name>,
     val topLevelCallableNames: Set<Name>,
     val mappings: List<EternalScriptGeneratedMapping>
-)
-
-internal data class EternalScriptImportEntry(
-    val name: String?,
-    val importPath: String,
-    val source: EternalScriptSourceLocation,
-    val sourcePointer: SmartPsiElementPointer<KtImportDirective>
 )
 
 internal data class EternalScriptRenderedDeclaration(
@@ -69,12 +48,6 @@ internal enum class EternalScriptDeclarationKind {
     CLASSIFIER
 }
 
-internal data class EternalScriptReferenceCandidate(
-    val name: String,
-    val sourceUrl: String,
-    val pointer: SmartPsiElementPointer<KtNameReferenceExpression>
-)
-
 internal data class EternalScriptFileAbi(
     val sourceUrl: String,
     val contentStamp: Long,
@@ -87,8 +60,6 @@ internal data class EternalScriptFileAbi(
     val declaredNames: Set<String>,
     val referencedNames: Set<String>,
     val stable: Boolean,
-    val referenceCandidates: List<EternalScriptReferenceCandidate> = emptyList(),
-    val importEntries: List<EternalScriptImportEntry> = emptyList(),
     val retryable: Boolean = !stable
 )
 
@@ -101,9 +72,7 @@ internal data class EternalScriptWorkspace(
     val packageName: FqName,
     val receiverName: String,
     val sourceUrls: Set<String>,
-    val activeSourceUrls: Set<String>,
     val fileAbis: Map<String, EternalScriptFileAbi>,
-    val conflicts: Map<EternalScriptSourceLocation, EternalScriptConflict>,
     val pendingInvalidatedNames: Set<String>,
     val generatedFiles: List<EternalScriptGeneratedFile>,
     val configurationFingerprint: String,
@@ -118,74 +87,20 @@ internal data class EternalScriptWorkspace(
         path.startsWith(scriptRoot) && EternalScriptIncrementalPlanner.isVisibleToIde(scriptRoot, path)
     }.getOrDefault(false)
 
-    fun isActive(file: VirtualFile): Boolean = file.url in activeSourceUrls
-
     fun generatedFile(fileName: String): EternalScriptGeneratedFile? =
         generatedFiles.firstOrNull { generated -> generated.fileName == fileName }
 }
 
 internal data class EternalScriptProjectSnapshot(
     val workspaces: List<EternalScriptWorkspace>,
-    val problems: List<EternalScriptEnvironmentProblem>,
     val digest: String,
-    val version: Long = 0,
-    val metrics: EternalScriptIdeMetrics = EternalScriptIdeMetrics.EMPTY
+    val version: Long = 0
 ) {
     fun workspaceFor(file: VirtualFile): EternalScriptWorkspace? = workspaces
         .filter { workspace -> workspace.contains(file) }
         .maxByOrNull { workspace -> workspace.scriptRoot.nameCount }
 
     companion object {
-        val EMPTY: EternalScriptProjectSnapshot = EternalScriptProjectSnapshot(emptyList(), emptyList(), "")
+        val EMPTY: EternalScriptProjectSnapshot = EternalScriptProjectSnapshot(emptyList(), "")
     }
-}
-
-internal data class EternalScriptIdeMetrics(
-    val workspaceScans: Long,
-    val changedFiles: Long,
-    val abiAnalyses: Long,
-    val configurationReloads: Long,
-    val cancellations: Long,
-    val lastAnalysisMillis: Long
-) {
-    companion object {
-        val EMPTY: EternalScriptIdeMetrics = EternalScriptIdeMetrics(0, 0, 0, 0, 0, 0)
-    }
-}
-
-internal sealed interface EternalScriptEnvironmentProblem {
-    val manifest: Path?
-
-    data class Missing(override val manifest: Path? = null) : EternalScriptEnvironmentProblem
-
-    data class Invalid(override val manifest: Path, val reason: String) : EternalScriptEnvironmentProblem
-
-    data class Incompatible(
-        override val manifest: Path,
-        val actual: Int,
-        val expected: Int
-    ) : EternalScriptEnvironmentProblem
-
-    data class Untrusted(override val manifest: Path) : EternalScriptEnvironmentProblem
-
-    data class UnsafeScriptRoot(
-        override val manifest: Path,
-        val root: String
-    ) : EternalScriptEnvironmentProblem
-
-    data class MissingClasspath(
-        override val manifest: Path,
-        val paths: List<Path>
-    ) : EternalScriptEnvironmentProblem
-
-    data class IncompatibleKotlin(
-        override val manifest: Path,
-        val actual: String,
-        val expected: String
-    ) : EternalScriptEnvironmentProblem
-
-    data class AnalysisUnstable(
-        override val manifest: Path,
-        val sourceUrls: Set<String>
-    ) : EternalScriptEnvironmentProblem
 }

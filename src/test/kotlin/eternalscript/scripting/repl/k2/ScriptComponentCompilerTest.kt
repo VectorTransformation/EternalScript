@@ -1,6 +1,10 @@
 package eternalscript.scripting.repl.k2
 
 import eternalscript.api.script.Script
+import eternalscript.logging.EternalLogLevel
+import eternalscript.logging.OperationalLogSink
+import eternalscript.logging.ScriptLoggingRuntime
+import eternalscript.logging.UnifiedLoggingService
 import eternalscript.scripting.repl.SCRIPT_JVM_TARGET
 import eternalscript.scripting.repl.ScriptCompilerConfig
 import eternalscript.scripting.repl.SharedReplSource
@@ -10,6 +14,8 @@ import java.nio.file.Files
 import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import javax.tools.ToolProvider
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.TextComponent
 import kotlin.script.experimental.api.ScriptCompilationConfiguration
 import kotlin.script.experimental.api.compilerOptions
 import kotlin.script.experimental.api.defaultImports
@@ -35,6 +41,76 @@ class ScriptComponentCompilerTest {
                 listOf(java.io.File(Script::class.java.protectionDomain.codeSource.location.toURI()))
             )
             compilerOptions.append("-jvm-target=$SCRIPT_JVM_TARGET")
+        }
+    }
+
+    @Test
+    fun `script logging has logical path during top level and lifecycle callbacks`() {
+        val temp = Files.createTempDirectory("eternalscript-script-logging")
+        val messages = mutableListOf<String>()
+        val logging = UnifiedLoggingService(
+            { EternalLogLevel.DEBUG },
+            { 500L },
+            object : OperationalLogSink {
+                override fun write(
+                    level: EternalLogLevel,
+                    message: Component,
+                    cause: Throwable?
+                ) {
+                    messages += (message as TextComponent).content()
+                }
+            }
+        )
+        val registration = ScriptLoggingRuntime.install(logging)
+        var compiledGeneration: CompiledComponentGeneration? = null
+        var evaluatedGeneration: EvaluatedComponentGeneration? = null
+        try {
+            val result = ScriptComponentCompiler(
+                configuration,
+                temp,
+                Script::class.java.classLoader
+            ).compile(
+                listOf(
+                    SharedReplSource(
+                        "logging/lifecycle.eternal.kts",
+                        """
+                        log.info("top")
+                        onLoad { log.info("load") }
+                        onUnload { log.info("unload") }
+                        onDispose { log.info("dispose") }
+                        """.trimIndent()
+                    )
+                )
+            )
+            val compiled = assertIs<ComponentCompilationResult.Success>(result)
+            compiledGeneration = compiled.generation
+            val evaluated = assertIs<ComponentEvaluationResult.Success>(
+                ComponentGenerationEvaluator.evaluate(
+                    compiled.generation,
+                    compiled.affectedPaths,
+                    Script::class.java.classLoader
+                )
+            ).generation
+            evaluatedGeneration = evaluated
+            val script = evaluated.scripts.getValue("logging/lifecycle.eternal.kts").script
+            val declarations = script.freezeDeclarations()
+
+            declarations.loadCallbacks.single().invoke()
+            declarations.unloadCallbacks.single().invoke()
+            script.disposeDeclarations()
+
+            assertEquals(
+                listOf("top", "load", "unload", "dispose").map { message ->
+                    "[script:logging/lifecycle.eternal.kts] $message"
+                },
+                messages
+            )
+        } finally {
+            evaluatedGeneration?.close()
+            compiledGeneration?.close()
+            registration.close()
+            temp.toFile().deleteRecursively()
+            ReplStateBridge.stage(ReplStateBridge.StateTable()) { ReplStateBridge.clear() }
         }
     }
 

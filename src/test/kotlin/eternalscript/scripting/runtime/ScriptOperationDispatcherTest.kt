@@ -33,9 +33,9 @@ class ScriptOperationDispatcherTest {
             isMainThread = { false },
             schedule = { block -> queued = block }
         )
-        val pending = dispatcher.dispatch(ScriptOperation.LOAD, ::disabled) { future ->
+        val pending = dispatcher.dispatch(ScriptOperation.ENABLE, ::disabled) { future ->
             executed.set(true)
-            future.complete(result(ScriptOperation.LOAD, ScriptOperationStatus.SUCCESS))
+            future.complete(result(ScriptOperation.ENABLE, ScriptOperationStatus.SUCCESS))
         }
 
         dispatcher.close(::disabled)
@@ -73,9 +73,9 @@ class ScriptOperationDispatcherTest {
             schedule = { throw IllegalStateException("scheduler stopped") }
         )
 
-        val result = dispatcher.dispatch(ScriptOperation.UNLOAD, ::disabled) { future ->
+        val result = dispatcher.dispatch(ScriptOperation.DISABLE, ::disabled) { future ->
             executed.set(true)
-            future.complete(result(ScriptOperation.UNLOAD, ScriptOperationStatus.SUCCESS))
+            future.complete(result(ScriptOperation.DISABLE, ScriptOperationStatus.SUCCESS))
         }.toCompletableFuture().get()
 
         assertEquals(ScriptOperationStatus.DISABLED, result.status)
@@ -91,9 +91,9 @@ class ScriptOperationDispatcherTest {
         )
         dispatcher.close(::disabled)
 
-        val result = dispatcher.dispatch(ScriptOperation.CLEAR, ::disabled) { future ->
+        val result = dispatcher.dispatch(ScriptOperation.CANCEL, ::disabled) { future ->
             executed.set(true)
-            future.complete(result(ScriptOperation.CLEAR, ScriptOperationStatus.SUCCESS))
+            future.complete(result(ScriptOperation.CANCEL, ScriptOperationStatus.SUCCESS))
         }.toCompletableFuture().get()
 
         assertEquals(ScriptOperationStatus.DISABLED, result.status)

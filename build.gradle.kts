@@ -17,8 +17,8 @@ plugins {
 }
 
 group = "eternalscript"
-val pluginVersion = "2.1.2"
-val javaVersion = 25
+val runtimeVersion = providers.gradleProperty("runtimeVersion").get()
+val javaVersion = providers.gradleProperty("javaVersion").map(String::toInt).get()
 val pluginApiVersion = "26.2"
 val minecraftVersion = "26.2"
 val paperBuild = "112-stable"
@@ -26,7 +26,6 @@ val paperVersion = "$minecraftVersion.build.$paperBuild"
 val managementPermissionActions = listOf(
     "help",
     "reload",
-    "compile",
     "load",
     "unload",
     "clear",
@@ -34,7 +33,7 @@ val managementPermissionActions = listOf(
     "list",
     "status"
 )
-project.version = pluginVersion
+project.version = runtimeVersion
 val minecraftHeapSize = 8
 val minecraftArgs = listOf(
     "-Xmx${minecraftHeapSize}G",
@@ -72,7 +71,8 @@ val runtimeLibraries = listOf(
     "org.jetbrains.kotlin:kotlin-scripting-jvm:$kotlinVersion",
     "org.jetbrains.kotlin:kotlin-scripting-jvm-host:$kotlinVersion",
     "org.jetbrains.kotlin:kotlin-metadata-jvm:$kotlinVersion",
-    "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0"
+    "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+    "org.xerial:sqlite-jdbc:3.53.4.0"
 )
 val projectJavaLauncher = javaToolchains.launcherFor {
     languageVersion.set(JavaLanguageVersion.of(javaVersion))
@@ -85,18 +85,12 @@ repositories {
 dependencies {
     implementation(project(":ide-protocol"))
     paperweight.paperDevBundle(paperVersion)
-    runtimeLibraries.forEach { coordinate -> compileOnly(coordinate) }
+    runtimeLibraries.forEach { coordinate ->
+        compileOnly(coordinate)
+        testImplementation(coordinate)
+    }
     implementation("org.bstats:bstats-bukkit:3.2.1")
     testImplementation(kotlin("test", kotlinVersion))
-    testImplementation(kotlin("compiler-embeddable", kotlinVersion))
-    testImplementation(kotlin("script-runtime", kotlinVersion))
-    testImplementation(kotlin("scripting-common", kotlinVersion))
-    testImplementation(kotlin("scripting-compiler-embeddable", kotlinVersion))
-    testImplementation(kotlin("scripting-jvm", kotlinVersion))
-    testImplementation(kotlin("scripting-jvm-host", kotlinVersion))
-    testImplementation("org.jetbrains.kotlin:kotlin-metadata-jvm:$kotlinVersion")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
 }
 
 val generateRuntimeLibraries = tasks.register<WriteProperties>("generateRuntimeLibraries") {
@@ -133,6 +127,17 @@ tasks {
     }
 }
 
+tasks.register("releaseCheck") {
+    group = "verification"
+    description = "Builds and verifies the runtime and IntelliJ release artifacts."
+    dependsOn(
+        ":build",
+        ":ide-protocol:build",
+        ":intellij-plugin:build",
+        ":intellij-plugin:verifyPlugin"
+    )
+}
+
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(javaVersion)
 }
@@ -145,7 +150,7 @@ kotlin {
 paperPluginYaml {
     name = rootProject.name
     main = pluginMain()
-    version = pluginVersion
+    version = runtimeVersion
     apiVersion = pluginApiVersion
     loader = "${pluginMain()}Loader"
     permissions.register("eternalscript.admin") {

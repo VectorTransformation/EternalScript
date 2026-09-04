@@ -5,7 +5,7 @@ import eternalscript.scripting.repl.k2.BatchCompilationResult
 import eternalscript.scripting.repl.k2.BatchEvaluationResult
 import eternalscript.scripting.repl.k2.BatchK2Compiler
 import eternalscript.scripting.repl.k2.BatchK2Evaluator
-import eternalscript.scripting.source.isEternalScriptFile
+import eternalscript.scripting.source.ETERNAL_SCRIPT_EXTENSION
 import java.io.File
 import kotlin.script.experimental.api.ScriptCompilationConfiguration
 import kotlin.script.experimental.api.isStandalone
@@ -26,7 +26,7 @@ class BundledScriptExamplesTest {
     fun `bundled scripts compile with curated defaults and bidirectional shared declarations`() {
         val root = File(requireNotNull(javaClass.classLoader.getResource("scripts")).toURI())
         val sources = root.walkTopDown()
-            .filter(::isEternalScriptFile)
+            .filter { file -> file.isFile && file.name.endsWith(".$ETERNAL_SCRIPT_EXTENSION") }
             .map { file ->
                 SharedReplSource(
                     file.relativeTo(root).invariantSeparatorsPath,
@@ -43,6 +43,7 @@ class BundledScriptExamplesTest {
                 "-example/function.eternal.kts",
                 "-example/function_use.eternal.kts",
                 "-example/lifecycle.eternal.kts",
+                "-example/storage.eternal.kts",
                 "hello.eternal.kts"
             ),
             sources.map(SharedReplSource::name)

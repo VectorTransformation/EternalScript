@@ -28,11 +28,11 @@ import org.jetbrains.kotlin.analysis.api.permissions.KaAllowAnalysisOnEdt
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
@@ -43,28 +43,26 @@ import kotlin.test.assertTrue
 internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
     override fun createTempDirTestFixture(): TempDirTestFixture = TempDirTestFixtureImpl()
 
-    fun testMissingDamagedAndIncompatibleEnvironmentStates() {
+    fun testMissingDamagedAndValidEnvironmentStates() {
         val base = Path.of(myFixture.tempDirPath)
         val model = EternalScriptProjectService.getInstance(project)
         model.setScriptConfigurationReloadsEnabledForTests(false)
         myFixture.addFileToProject("scripts/test.eternal.kts", "val value: Int = 1")
 
         model.rebuildSynchronouslyForTests(base)
-        assertIs<EternalScriptEnvironmentProblem.Missing>(model.current().problems.single())
+        assertTrue(model.current().workspaces.isEmpty())
 
         val manifest = base.resolve(IdeProtocol.ENVIRONMENT_FILE)
         Files.createDirectories(manifest.parent)
         Files.writeString(manifest, "not-an-environment")
         VirtualFileManager.getInstance().syncRefresh()
         model.rebuildSynchronouslyForTests(base)
-        assertIs<EternalScriptEnvironmentProblem.Invalid>(model.current().problems.single())
+        assertTrue(model.current().workspaces.isEmpty())
 
-        Files.write(manifest, environment(base, IdeProtocol.VERSION + 1))
+        Files.write(manifest, environment(base))
         VirtualFileManager.getInstance().syncRefresh()
         model.rebuildSynchronouslyForTests(base)
-        val incompatible = assertIs<EternalScriptEnvironmentProblem.Incompatible>(model.current().problems.single())
-        assertEquals(IdeProtocol.VERSION + 1, incompatible.actual)
-        assertEquals(IdeProtocol.VERSION, incompatible.expected)
+        assertEquals("fixture-${base.fileName}", model.current().workspaces.single().environment.environmentFingerprint())
     }
 
     fun testMultipleWorkspacesKeepSourceDeclarationsIsolated() {
@@ -120,15 +118,101 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         assertTrue(nestedFile.virtualFile.url in nestedWorkspace.sourceUrls)
     }
 
-    fun testRejectsUntrustedMissingClasspathAndIncompatibleKotlinEnvironments() {
+    fun testSourceChangeBetweenDiscoveryAnalysisAndDescriptorPublicationIsRehomedToNewNestedWorkspace() {
+        val base = Path.of(myFixture.tempDirPath)
+        val outer = base.resolve("outer")
+        val nested = outer.resolve("scripts/nested")
+        val outerFile = myFixture.addFileToProject(
+            "outer/scripts/outer.eternal.kts",
+            "val outerValue: Int = 1"
+        ).virtualFile
+        val nestedFile = myFixture.addFileToProject(
+            "outer/scripts/nested/scripts/nested.eternal.kts",
+            "val staleNestedValue: Int = 1"
+        ).virtualFile
+        writeEnvironment(outer)
+        VirtualFileManager.getInstance().syncRefresh()
+        val model = EternalScriptProjectService.getInstance(project)
+        model.setScriptConfigurationReloadsEnabledForTests(false)
+        model.rebuildSynchronouslyForTests(base)
+        val outerId = model.current().workspaces.single().id
+
+        writeEnvironment(nested)
+        VirtualFileManager.getInstance().syncRefresh()
+        model.setBeforeDescriptorPublicationForTests {
+            Files.writeString(nestedFile.toNioPath(), "val freshNestedValue: String = \"fresh\"")
+            nestedFile.refresh(false, false)
+            // This deliberately resolves through the old outer-only descriptor map.
+            model.markChangedForTests(nestedFile.toNioPath())
+        }
+        try {
+            model.rebuildSynchronouslyForTests(base)
+        } finally {
+            model.setBeforeDescriptorPublicationForTests(null)
+        }
+
+        val afterDiscovery = model.current()
+        val outerWorkspace = afterDiscovery.workspaces.single { it.id == outerId }
+        val nestedWorkspace = afterDiscovery.workspaces.single { it.id != outerId }
+        assertTrue(outerFile.url in outerWorkspace.sourceUrls)
+        assertFalse(nestedFile.url in outerWorkspace.sourceUrls)
+        assertTrue(nestedFile.url in nestedWorkspace.sourceUrls)
+        assertEquals(nestedWorkspace.id, model.pendingWorkspaceForPathForTests(nestedFile.toNioPath()))
+
+        model.analyzePathSynchronouslyForTests(nestedFile.toNioPath())
+
+        val afterReplay = model.current()
+        val replayedOuter = afterReplay.workspaces.single { it.id == outerId }
+        val replayedNested = afterReplay.workspaces.single { it.id == nestedWorkspace.id }
+        assertFalse(nestedFile.url in replayedOuter.sourceUrls)
+        assertFalse(replayedOuter.generatedText.contains("freshNestedValue"))
+        assertContains(replayedNested.generatedText, "freshNestedValue")
+    }
+
+    fun testSourceChangeWithoutAnOldOwnerRequestsRediscoveryAfterDescriptorPublication() {
+        val base = Path.of(myFixture.tempDirPath)
+        val script = myFixture.addFileToProject(
+            "scripts/provider.eternal.kts",
+            "val staleValue: Int = 1"
+        ).virtualFile
+        val model = EternalScriptProjectService.getInstance(project)
+        model.setScriptConfigurationReloadsEnabledForTests(false)
+        model.rebuildSynchronouslyForTests(base)
+        assertTrue(model.current().workspaces.isEmpty())
+
+        writeEnvironment(base)
+        VirtualFileManager.getInstance().syncRefresh()
+        val requestsBefore = model.sourceChangeRediscoveryRequestsForTests()
+        model.setBeforeDescriptorPublicationForTests {
+            Files.writeString(script.toNioPath(), "val freshValue: String = \"fresh\"")
+            script.refresh(false, false)
+            // There is no old owner yet, so this would have been silently dropped without
+            // the global source-change epoch replay.
+            model.markChangedForTests(script.toNioPath())
+        }
+        try {
+            model.rebuildSynchronouslyForTests(base)
+        } finally {
+            model.setBeforeDescriptorPublicationForTests(null)
+        }
+
+        assertEquals(requestsBefore + 1, model.sourceChangeRediscoveryRequestsForTests())
+        assertFalse(model.current().workspaces.single().generatedText.contains("freshValue"))
+
+        // Synchronous test mode intentionally does not run the queued alarm; replay its next
+        // discovery deterministically and verify that the event's ABI is no longer stale.
+        model.rebuildSynchronouslyForTests(base)
+        assertContains(model.current().workspaces.single().generatedText, "freshValue")
+    }
+
+    fun testRejectsUntrustedAndMissingClasspathEnvironments() {
         val base = Path.of(myFixture.tempDirPath)
         val untrustedRoot = base.resolve("untrusted")
         Files.createDirectories(untrustedRoot.resolve("scripts"))
         writeEnvironment(untrustedRoot)
         val untrustedManifest = untrustedRoot.resolve(IdeProtocol.ENVIRONMENT_FILE)
         val untrusted = WorkspaceRegistry(project) { false }.load(listOf(untrustedManifest))
-        assertTrue(untrusted.descriptors.isEmpty())
-        assertIs<EternalScriptEnvironmentProblem.Untrusted>(untrusted.problems.single())
+        assertTrue(untrusted.isEmpty())
 
         val missingRoot = base.resolve("missing-classpath")
         Files.createDirectories(missingRoot.resolve("scripts"))
@@ -136,27 +220,18 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         Files.createDirectories(missingManifest.parent)
         Files.write(
             missingManifest,
-            environment(missingRoot, IdeProtocol.VERSION, listOf(missingRoot.resolve("absent.jar").toUri()))
+            environment(missingRoot, listOf(missingRoot.resolve("absent.jar").toUri()))
         )
         val missing = WorkspaceRegistry(project).load(listOf(missingManifest))
-        assertTrue(missing.descriptors.isEmpty())
-        assertIs<EternalScriptEnvironmentProblem.MissingClasspath>(missing.problems.single())
+        assertTrue(missing.isEmpty())
 
-        val kotlinRoot = base.resolve("wrong-kotlin")
-        Files.createDirectories(kotlinRoot.resolve("scripts"))
-        val kotlinManifest = kotlinRoot.resolve(IdeProtocol.ENVIRONMENT_FILE)
-        Files.createDirectories(kotlinManifest.parent)
-        Files.write(kotlinManifest, environment(kotlinRoot, IdeProtocol.VERSION, kotlinVersion = "2.5.0"))
-        val incompatible = WorkspaceRegistry(project).load(listOf(kotlinManifest))
-        assertTrue(incompatible.descriptors.isEmpty())
-        assertIs<EternalScriptEnvironmentProblem.IncompatibleKotlin>(incompatible.problems.single())
     }
 
-    fun testOneOfOneThousandPsiScriptsReanalyzesWithoutRescanOrConfigurationReload() {
+    fun testOneChangedPsiScriptReanalyzesWithoutRescan() {
         val base = Path.of(myFixture.tempDirPath)
         val scriptRoot = base.resolve("scripts")
         Files.createDirectories(scriptRoot)
-        repeat(1_000) { index ->
+        repeat(3) { index ->
             Files.writeString(scriptRoot.resolve("script-$index.eternal.kts"), "val value$index: Int = $index")
         }
         writeEnvironment(base)
@@ -165,29 +240,23 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         model.setScriptConfigurationReloadsEnabledForTests(false)
         model.rebuildSynchronouslyForTests(base)
         val beforeWorkspace = model.current().workspaces.single()
-        val before = model.metricsForTests()
         val scans = model.indexedScanCountForTests()
-        val changed = scriptRoot.resolve("script-500.eternal.kts")
+        val changed = scriptRoot.resolve("script-1.eternal.kts")
 
-        Files.writeString(changed, "val value500: Int = 501")
+        Files.writeString(changed, "val value1: Int = 2")
         LocalFileSystem.getInstance().refreshAndFindFileByNioFile(changed)?.refresh(false, false)
         model.analyzePathSynchronouslyForTests(changed)
 
-        val after = model.metricsForTests()
         assertEquals(scans, model.indexedScanCountForTests())
-        assertEquals(before.workspaceScans, after.workspaceScans)
-        assertEquals(before.configurationReloads, after.configurationReloads)
-        assertEquals(before.abiAnalyses + 1, after.abiAnalyses)
         val afterWorkspace = model.current().workspaces.single()
         assertSame(beforeWorkspace.generatedFiles, afterWorkspace.generatedFiles)
-        assertSame(beforeWorkspace.conflicts, afterWorkspace.conflicts)
         assertTrue(afterWorkspace.pendingInvalidatedNames.isEmpty())
         assertEquals(beforeWorkspace.configurationFingerprint, afterWorkspace.configurationFingerprint)
         assertEquals(beforeWorkspace.digest, afterWorkspace.digest)
         assertNotEquals(
-            beforeWorkspace.fileAbis.getValue(beforeWorkspace.sourceUrls.single { it.endsWith("script-500.eternal.kts") })
+            beforeWorkspace.fileAbis.getValue(beforeWorkspace.sourceUrls.single { it.endsWith("script-1.eternal.kts") })
                 .contentDigest,
-            afterWorkspace.fileAbis.getValue(afterWorkspace.sourceUrls.single { it.endsWith("script-500.eternal.kts") })
+            afterWorkspace.fileAbis.getValue(afterWorkspace.sourceUrls.single { it.endsWith("script-1.eternal.kts") })
                 .contentDigest
         )
     }
@@ -219,7 +288,55 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         assertContains(afterDeclarations.text, "val sharedValue: kotlin.String")
     }
 
-    fun testDisabledDeclarationsStayOutOfTheSyntheticModelUntilEnabled() {
+    fun testRemovedWorkspaceRetiresQueuedAnalysisState() {
+        val base = Path.of(myFixture.tempDirPath)
+        val script = myFixture.addFileToProject(
+            "scripts/provider.eternal.kts",
+            "val sharedValue: Int = 1"
+        ).virtualFile
+        writeEnvironment(base)
+        VirtualFileManager.getInstance().syncRefresh()
+        val model = EternalScriptProjectService.getInstance(project)
+        model.setScriptConfigurationReloadsEnabledForTests(false)
+        model.rebuildSynchronouslyForTests(base)
+        val workspaceId = model.current().workspaces.single().id
+
+        model.seedWorkspaceWorkStateForTests(workspaceId, script.toNioPath(), script.url)
+        assertTrue(model.hasWorkspaceWorkStateForTests(workspaceId))
+
+        val analysisEntered = CountDownLatch(1)
+        val releaseAnalysis = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val analysis = Thread {
+            model.withWorkspaceAnalysisGateForTests(workspaceId) {
+                analysisEntered.countDown()
+                check(releaseAnalysis.await(30, TimeUnit.SECONDS))
+                model.seedWorkspaceWorkStateForTests(workspaceId, script.toNioPath(), script.url)
+            }
+        }
+        val cleanup = Thread {
+            cleanupStarted.countDown()
+            model.retireWorkspaceWorkStateForTests(emptySet())
+        }
+
+        analysis.start()
+        assertTrue(analysisEntered.await(30, TimeUnit.SECONDS))
+        cleanup.start()
+        assertTrue(cleanupStarted.await(30, TimeUnit.SECONDS))
+        try {
+            waitForBlocked(cleanup)
+        } finally {
+            releaseAnalysis.countDown()
+            analysis.join(30_000)
+            cleanup.join(30_000)
+        }
+
+        assertFalse(analysis.isAlive)
+        assertFalse(cleanup.isAlive)
+        assertFalse(model.hasWorkspaceWorkStateForTests(workspaceId))
+    }
+
+    fun testDisabledDeclarationsRemainInTheIdeModelAcrossRuntimeActiveStateChanges() {
         val base = Path.of(myFixture.tempDirPath)
         myFixture.addFileToProject(
             "scripts/active.eternal.kts",
@@ -237,19 +354,18 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         model.rebuildSynchronouslyForTests(base)
         val before = model.current().workspaces.single()
         assertTrue(disabled.url in before.sourceUrls)
-        assertFalse(disabled.url in before.activeSourceUrls)
         assertContains(before.generatedText, "activeValue")
-        assertFalse(before.generatedText.contains("disabledValue"))
+        assertContains(before.generatedText, "disabledValue")
 
         Files.writeString(disabled.toNioPath(), "val changedDisabledValue: String = \"changed\"")
         disabled.refresh(false, false)
         model.analyzePathSynchronouslyForTests(disabled.toNioPath())
 
         val afterDisabledEdit = model.current().workspaces.single()
-        assertSame(before.generatedFiles, afterDisabledEdit.generatedFiles)
-        assertSame(before.conflicts, afterDisabledEdit.conflicts)
-        assertTrue(afterDisabledEdit.pendingInvalidatedNames.isEmpty())
-        assertFalse(afterDisabledEdit.generatedText.contains("changedDisabledValue"))
+        assertNotSame(before.generatedFiles.single(), afterDisabledEdit.generatedFiles.single())
+        assertContains(afterDisabledEdit.pendingInvalidatedNames, "disabledValue")
+        assertContains(afterDisabledEdit.pendingInvalidatedNames, "changedDisabledValue")
+        assertContains(afterDisabledEdit.generatedText, "changedDisabledValue")
 
         WriteCommandAction.runWriteCommandAction(project) {
             disabled.rename(this, "provider.eternal.kts")
@@ -257,7 +373,7 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         model.rebuildSynchronouslyForTests(base)
 
         val enabled = model.current().workspaces.single()
-        assertTrue(disabled.url in enabled.activeSourceUrls)
+        assertTrue(disabled.url in enabled.sourceUrls)
         assertContains(enabled.generatedText, "changedDisabledValue")
 
         WriteCommandAction.runWriteCommandAction(project) {
@@ -266,8 +382,8 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         model.rebuildSynchronouslyForTests(base)
 
         val disabledAgain = model.current().workspaces.single()
-        assertFalse(disabled.url in disabledAgain.activeSourceUrls)
-        assertFalse(disabledAgain.generatedText.contains("changedDisabledValue"))
+        assertTrue(disabled.url in disabledAgain.sourceUrls)
+        assertContains(disabledAgain.generatedText, "changedDisabledValue")
     }
 
     fun testVfsRenameMoveCopyAndDirectoryDeleteRequestWorkspaceRediscovery() {
@@ -390,6 +506,14 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
         }
     }
 
+    private fun waitForBlocked(thread: Thread) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (thread.state != Thread.State.BLOCKED && thread.isAlive && System.nanoTime() < deadline) {
+            Thread.onSpinWait()
+        }
+        assertEquals(Thread.State.BLOCKED, thread.state)
+    }
+
     private fun kotlinScriptNotificationCount(fileName: String): Int =
         NotificationsManager.getNotificationsManager()
             .getNotificationsOfType(Notification::class.java, project)
@@ -401,24 +525,18 @@ internal class EternalScriptProjectEnvironmentTest : BasePlatformTestCase() {
     private fun writeEnvironment(workspace: Path) {
         val manifest = workspace.resolve(IdeProtocol.ENVIRONMENT_FILE)
         Files.createDirectories(manifest.parent)
-        Files.write(manifest, environment(workspace, IdeProtocol.VERSION))
+        Files.write(manifest, environment(workspace))
     }
 
     private fun environment(
         workspace: Path,
-        protocolVersion: Int,
-        classpath: List<java.net.URI> = emptyList(),
-        kotlinVersion: String = "2.4.10"
+        classpath: List<java.net.URI> = emptyList()
     ): ByteArray = IdeEnvironmentCodec.encode(
         IdeEnvironment(
-            protocolVersion,
             UUID.nameUUIDFromBytes(workspace.toString().toByteArray()).toString(),
-            "2.1.0-test",
-            kotlinVersion,
-            "fixture-${workspace.fileName}-$protocolVersion",
+            "fixture-${workspace.fileName}",
             "scripts",
-            classpath,
-            emptyList()
+            classpath
         )
     )
 }

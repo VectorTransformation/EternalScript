@@ -6,6 +6,7 @@ import org.bukkit.plugin.java.JavaPlugin
 
 internal class ActiveScript(
     private val script: Script,
+    source: String,
     plugin: JavaPlugin,
     private val commandRegistry: ScriptCommandRegistry,
     executionContext: ScriptExecutionContext
@@ -20,7 +21,9 @@ internal class ActiveScript(
         DISPOSED
     }
 
-    private val declarations: ScriptDeclarationSnapshot = script.freezeDeclarations()
+    private val declarations: ScriptDeclarationSnapshot = script
+        .also { instance -> instance.attachRuntimeSource(source) }
+        .freezeDeclarations()
     private val lifecycle = ScriptLifecycleHooks(
         declarations.loadCallbacks,
         declarations.unloadCallbacks

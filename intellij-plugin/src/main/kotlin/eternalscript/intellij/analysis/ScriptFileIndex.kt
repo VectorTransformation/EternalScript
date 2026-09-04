@@ -62,7 +62,6 @@ internal class ScriptFileIndex {
     fun update(descriptor: EternalScriptWorkspaceDescriptor, path: Path): IndexedScriptFile? {
         val normalized = path.toAbsolutePath().normalize()
         if (!normalized.startsWith(descriptor.scriptRoot) || !isScript(normalized)) return null
-        val mutable = files[descriptor.id].orEmpty().toMutableMap()
         val url = LocalFileSystem.getInstance().findFileByNioFile(normalized)?.url
             ?: VfsUtilCore.pathToUrl(normalized.toString())
         val entry = if (Files.isRegularFile(normalized, LinkOption.NOFOLLOW_LINKS) &&
@@ -73,12 +72,15 @@ internal class ScriptFileIndex {
                 normalized,
                 url,
                 EternalScriptIncrementalPlanner.isActivePath(descriptor.scriptRoot, normalized)
-            ).also { value -> mutable[url] = value }
+            )
         } else {
-            mutable.remove(url)
             null
         }
-        files[descriptor.id] = mutable.toMap()
+        files.compute(descriptor.id) { _, current ->
+            current.orEmpty().toMutableMap().apply {
+                if (entry == null) remove(url) else put(url, entry)
+            }.toMap()
+        }
         return entry
     }
 

@@ -9,7 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.JarFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiManager
-import eternalscript.intellij.diagnostics.EternalScriptIdeMetricsTracker
+import eternalscript.ide.protocol.IdeProtocol
 import eternalscript.intellij.model.EternalScriptProjectSnapshot
 import eternalscript.intellij.model.EternalScriptWorkspace
 import eternalscript.intellij.resolve.Idea262Facade
@@ -30,7 +30,6 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal class ScriptConfigurationCoordinator(
     private val project: Project,
-    private val metrics: EternalScriptIdeMetricsTracker,
     private val snapshot: () -> EternalScriptProjectSnapshot
 ) {
     private val definitionRegistered = AtomicBoolean()
@@ -56,10 +55,9 @@ internal class ScriptConfigurationCoordinator(
     fun definitionConfiguration(workspace: EternalScriptWorkspace): ScriptCompilationConfiguration {
         val classpath = workspace.environment.classpath().map { uri -> Path.of(uri).toFile() }
         return ScriptCompilationConfiguration {
-            defaultImports.append(workspace.environment.defaultImports())
             defaultImports.append("${workspace.packageName.asString()}.*")
             implicitReceivers.append(KotlinType(workspace.receiverFqName))
-            compilerOptions.append("-jvm-target=25", "-Xnested-type-aliases")
+            compilerOptions.append("-jvm-target=${IdeProtocol.SCRIPT_JVM_TARGET}", "-Xnested-type-aliases")
             if (classpath.isNotEmpty()) jvm { updateClasspath(classpath) }
         }
     }
@@ -164,9 +162,7 @@ internal class ScriptConfigurationCoordinator(
         if (configuredFiles[key] == fingerprint || !requestedFiles.add(key)) return
         val scheduled = runCatching { Idea262Facade.reloadScriptConfigurationSilently(psi) }
             .getOrDefault(false)
-        if (scheduled) {
-            metrics.configurationReload()
-        } else {
+        if (!scheduled) {
             requestedFiles.remove(key)
         }
     }

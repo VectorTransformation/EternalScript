@@ -10,6 +10,7 @@ import eternalscript.scripting.repl.k2.ComponentGenerationEvaluator
 import eternalscript.scripting.repl.k2.ScriptComponentCompiler
 import eternalscript.scripting.runtime.ReplStateBridge
 import java.nio.file.Files
+import java.util.UUID
 import kotlin.script.experimental.api.ScriptCompilationConfiguration
 import kotlin.script.experimental.api.compilerOptions
 import kotlin.script.experimental.api.isStandalone
@@ -39,7 +40,7 @@ class ComponentArtifactCacheTest {
         val root = Files.createTempDirectory("eternalscript-cache-v5")
         val compileRoot = root.resolve("compiled")
         val liveRoot = root.resolve("live")
-        val cacheRoot = root.resolve("scripts-v5").toFile()
+        val cacheRoot = root.resolve(ScriptCacheLayout.currentDirectoryName).toFile()
         val sources = listOf(
             SharedReplSource(
                 "00-provider.eternal.kts",
@@ -104,7 +105,7 @@ class ComponentArtifactCacheTest {
                 ScriptComponentCompiler(configuration, compileRoot, Script::class.java.classLoader)
                     .compile(sources)
             ).generation
-            val interruptedPublish = cacheRoot.resolve("objects").resolve(".interrupted.tmp")
+            val interruptedPublish = cacheRoot.resolve("objects").resolve(".$key-${UUID.randomUUID()}.tmp")
             interruptedPublish.mkdirs()
             interruptedPublish.resolve("partial.jar").writeBytes(byteArrayOf(1, 2, 3))
             assertEquals(key, cache.publish(repaired, environmentFingerprint))

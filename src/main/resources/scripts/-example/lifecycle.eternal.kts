@@ -4,17 +4,9 @@
  */
 
 onLoad {
-    feedback(
-        Bukkit.getConsoleSender(),
-        "Lifecycle example activated",
-        ScriptFeedbackLevel.SUCCESS
-    )
+    notify().success("Lifecycle example activated")
 }
 
 onUnload {
-    feedback(
-        Bukkit.getConsoleSender(),
-        "Lifecycle example deactivated",
-        ScriptFeedbackLevel.INFO
-    )
+    notify().info("Lifecycle example deactivated")
 }

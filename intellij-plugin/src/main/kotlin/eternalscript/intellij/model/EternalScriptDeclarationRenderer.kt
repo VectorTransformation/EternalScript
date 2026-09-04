@@ -36,16 +36,9 @@ internal object EternalScriptDeclarationRenderer {
         val contentDigest = digest(fileText)
         val scan = scanFile(file)
         val referencedNames = linkedSetOf<String>()
-        val referenceCandidates = ArrayList<EternalScriptReferenceCandidate>(scan.references.size)
         scan.references.forEachIndexed { index, reference ->
             if (index and CANCELLATION_CHECK_MASK == 0) ProgressManager.checkCanceled()
-            val name = reference.getReferencedName()
-            referencedNames += name
-            referenceCandidates += EternalScriptReferenceCandidate(
-                name,
-                sourceUrl,
-                SmartPointerManager.createPointer(reference)
-            )
+            referencedNames += reference.getReferencedName()
         }
         if (scan.hasSyntaxErrors) {
             return previous?.copy(
@@ -53,9 +46,8 @@ internal object EternalScriptDeclarationRenderer {
                 contentStamp = contentStamp,
                 referencedNames = referencedNames,
                 stable = false,
-                referenceCandidates = referenceCandidates,
                 retryable = false
-            ) ?: emptyAbi(sourceUrl, contentStamp, contentDigest, referencedNames, referenceCandidates)
+            ) ?: emptyAbi(sourceUrl, contentStamp, contentDigest, referencedNames)
         }
 
         val importDirectives = file.importDirectives
@@ -65,18 +57,6 @@ internal object EternalScriptDeclarationRenderer {
             .distinct()
             .sorted()
             .toList()
-        val importEntries = ArrayList<EternalScriptImportEntry>(importDirectives.size)
-        importDirectives.forEachIndexed { index, directive ->
-            if (index and CANCELLATION_CHECK_MASK == 0) ProgressManager.checkCanceled()
-            val path = importText(directive)
-            importEntries += EternalScriptImportEntry(
-                EternalScriptImportPlanner.importedName(path),
-                path,
-                EternalScriptSourceLocation(sourceUrl, directive.textOffset),
-                SmartPointerManager.createPointer(directive)
-            )
-        }
-
         val callables = mutableListOf<EternalScriptRenderedDeclaration>()
         val classifiers = mutableListOf<EternalScriptRenderedDeclaration>()
         val classifierNames = linkedSetOf<Name>()
@@ -147,9 +127,7 @@ internal object EternalScriptDeclarationRenderer {
             classifierNames,
             declaredNames,
             referencedNames,
-            stable,
-            referenceCandidates,
-            importEntries
+            stable
         )
     }
 
@@ -347,8 +325,7 @@ internal object EternalScriptDeclarationRenderer {
         sourceUrl: String,
         contentStamp: Long,
         contentDigest: String,
-        referencedNames: Set<String>,
-        referenceCandidates: List<EternalScriptReferenceCandidate>
+        referencedNames: Set<String>
     ): EternalScriptFileAbi = EternalScriptFileAbi(
         sourceUrl = sourceUrl,
         contentStamp = contentStamp,
@@ -361,7 +338,6 @@ internal object EternalScriptDeclarationRenderer {
         declaredNames = emptySet(),
         referencedNames = referencedNames,
         stable = false,
-        referenceCandidates = referenceCandidates,
         retryable = false
     )
 

@@ -16,22 +16,33 @@ internal data class ScriptSourceFile(
     val text: String
 )
 
-internal fun isEternalScriptFile(file: File): Boolean =
-    Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) &&
-        !Files.isSymbolicLink(file.toPath()) &&
-        file.name.endsWith(".$ETERNAL_SCRIPT_EXTENSION")
+internal data class DiscoveredScriptTarget(
+    val path: String,
+    val kind: ScriptTargetKind,
+    val enabled: Boolean
+)
 
-internal fun readScriptSources(root: File): List<ScriptSourceFile> = walkScripts(root)
-    .map { file -> ScriptSourceFile(file.toFile(), logicalScriptPath(file, root.toPath()), Files.readString(file)) }
-    .sortedWith(compareBy({ source -> source.name.lowercase(Locale.ROOT) }, ScriptSourceFile::name))
-    .toList()
+internal data class ScriptSourceScan(
+    val sources: List<ScriptSourceFile>,
+    val targets: List<DiscoveredScriptTarget>
+)
 
-internal fun discoverScriptTargets(root: File): List<String> {
+internal fun readScriptSources(root: File): List<ScriptSourceFile> = scanScriptSources(root).sources
+
+internal fun discoverScriptTargets(root: File): List<String> =
+    discoverScriptTargetEntries(root).map(DiscoveredScriptTarget::path)
+
+internal fun discoverScriptTargetEntries(root: File): List<DiscoveredScriptTarget> =
+    scanScriptSources(root).targets
+
+internal fun scanScriptSources(root: File): ScriptSourceScan {
     val rootPath = root.toPath().toAbsolutePath().normalize()
     check(Files.isDirectory(rootPath, LinkOption.NOFOLLOW_LINKS)) {
         "Scripts path is not a readable directory: $rootPath"
     }
-    val targets = linkedSetOf<String>()
+    check(Files.isReadable(rootPath)) { "Scripts directory is not readable: $rootPath" }
+    val sources = mutableListOf<ScriptSourceFile>()
+    val targets = linkedMapOf<String, DiscoveredScriptTarget>()
     Files.walkFileTree(rootPath, object : SimpleFileVisitor<Path>() {
         override fun preVisitDirectory(directory: Path, attributes: BasicFileAttributes): FileVisitResult {
             if (Files.isSymbolicLink(directory) || attributes.isOther) return FileVisitResult.SKIP_SUBTREE
@@ -39,11 +50,12 @@ internal fun discoverScriptTargets(root: File): List<String> {
             val logical = logicalScriptPath(directory, rootPath)
             if (directory.fileName.toString().startsWith('-')) {
                 if (directory.fileName.toString().isSingleDisabledName()) {
-                    targets += canonicalDisabledPath(logical)
+                    val path = canonicalDisabledPath(logical)
+                    targets[path] = DiscoveredScriptTarget(path, ScriptTargetKind.DIRECTORY, false)
                 }
                 return FileVisitResult.SKIP_SUBTREE
             }
-            targets += logical
+            targets[logical] = DiscoveredScriptTarget(logical, ScriptTargetKind.DIRECTORY, true)
             return FileVisitResult.CONTINUE
         }
 
@@ -54,12 +66,19 @@ internal fun discoverScriptTargets(root: File): List<String> {
                 name.removePrefix("-").endsWith(".$ETERNAL_SCRIPT_EXTENSION")
             if (attributes.isRegularFile && !attributes.isSymbolicLink && (enabledScript || disabledScript)) {
                 val logical = logicalScriptPath(file, rootPath)
-                targets += if (disabledScript) canonicalDisabledPath(logical) else logical
+                val path = if (disabledScript) canonicalDisabledPath(logical) else logical
+                targets[path] = DiscoveredScriptTarget(path, ScriptTargetKind.FILE, !disabledScript)
+                if (enabledScript) {
+                    sources += ScriptSourceFile(file.toFile(), logical, Files.readString(file))
+                }
             }
             return FileVisitResult.CONTINUE
         }
     })
-    return targets.sortedWith(compareBy(String::lowercase, { it }))
+    return ScriptSourceScan(
+        sources.sortedWith(compareBy({ source -> source.name.lowercase(Locale.ROOT) }, ScriptSourceFile::name)),
+        targets.values.sortedWith(compareBy({ it.path.lowercase(Locale.ROOT) }, { it.path }))
+    )
 }
 
 internal fun logicalScriptPath(file: Path, root: Path): String {
@@ -79,36 +98,3 @@ private fun canonicalDisabledPath(path: String): String {
 
 private fun String.isSingleDisabledName(): Boolean =
     startsWith('-') && !startsWith("--") && length > 1
-
-private fun walkScripts(root: File): Sequence<Path> {
-    val rootPath = root.toPath().toAbsolutePath().normalize()
-    check(Files.isDirectory(rootPath, LinkOption.NOFOLLOW_LINKS)) {
-        "Scripts path is not a readable directory: $rootPath"
-    }
-    check(Files.isReadable(rootPath)) { "Scripts directory is not readable: $rootPath" }
-    val files = mutableListOf<Path>()
-    Files.walkFileTree(rootPath, object : SimpleFileVisitor<Path>() {
-        override fun preVisitDirectory(directory: Path, attributes: BasicFileAttributes): FileVisitResult {
-            if (directory != rootPath && directory.fileName.toString().startsWith('-')) {
-                return FileVisitResult.SKIP_SUBTREE
-            }
-            if (Files.isSymbolicLink(directory) || attributes.isOther) {
-                return FileVisitResult.SKIP_SUBTREE
-            }
-            return FileVisitResult.CONTINUE
-        }
-
-        override fun visitFile(file: Path, attributes: BasicFileAttributes): FileVisitResult {
-            if (
-                attributes.isRegularFile &&
-                !attributes.isSymbolicLink &&
-                !file.fileName.toString().startsWith('-') &&
-                file.fileName.toString().endsWith(".$ETERNAL_SCRIPT_EXTENSION")
-            ) {
-                files.add(file)
-            }
-            return FileVisitResult.CONTINUE
-        }
-    })
-    return files.asSequence()
-}

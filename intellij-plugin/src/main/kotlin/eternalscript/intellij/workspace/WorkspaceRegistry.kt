@@ -8,8 +8,6 @@ import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
 import eternalscript.ide.protocol.IdeEnvironment
 import eternalscript.ide.protocol.IdeEnvironmentCodec
-import eternalscript.ide.protocol.IdeProtocol
-import eternalscript.intellij.model.EternalScriptEnvironmentProblem
 import eternalscript.intellij.resolve.Idea262Facade
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -26,11 +24,6 @@ internal data class EternalScriptWorkspaceDescriptor(
 ) {
     fun contains(path: Path): Boolean = path.startsWith(scriptRoot)
 }
-
-internal data class WorkspaceRegistrySnapshot(
-    val descriptors: List<EternalScriptWorkspaceDescriptor>,
-    val problems: List<EternalScriptEnvironmentProblem>
-)
 
 internal class WorkspaceRegistry(
     private val project: Project,
@@ -65,18 +58,10 @@ internal class WorkspaceRegistry(
         }
     }
 
-    fun load(manifests: Collection<Path>): WorkspaceRegistrySnapshot {
-        val problems = mutableListOf<EternalScriptEnvironmentProblem>()
-        if (!trusted()) {
-            manifests.sorted().forEach { manifest ->
-                problems += EternalScriptEnvironmentProblem.Untrusted(manifest)
-            }
-            return WorkspaceRegistrySnapshot(emptyList(), problems)
-        }
-        val descriptors = manifests.distinct().sorted().mapNotNull { manifest ->
-            loadManifest(manifest, problems)
-        }.sortedBy { descriptor -> descriptor.scriptRoot.toString() }
-        return WorkspaceRegistrySnapshot(descriptors, problems)
+    fun load(manifests: Collection<Path>): List<EternalScriptWorkspaceDescriptor> {
+        if (!trusted()) return emptyList()
+        return manifests.distinct().sorted().mapNotNull(::loadManifest)
+            .sortedBy { descriptor -> descriptor.scriptRoot.toString() }
     }
 
     fun nearest(descriptors: Collection<EternalScriptWorkspaceDescriptor>, path: Path): EternalScriptWorkspaceDescriptor? =
@@ -84,65 +69,25 @@ internal class WorkspaceRegistry(
             .filter { descriptor -> descriptor.contains(path) }
             .maxByOrNull { descriptor -> descriptor.scriptRoot.nameCount }
 
-    private fun loadManifest(
-        manifest: Path,
-        problems: MutableList<EternalScriptEnvironmentProblem>
-    ): EternalScriptWorkspaceDescriptor? {
+    private fun loadManifest(manifest: Path): EternalScriptWorkspaceDescriptor? {
         val normalizedManifest = manifest.toAbsolutePath().normalize()
         if (!Files.isRegularFile(normalizedManifest, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(normalizedManifest)) {
             return null
         }
-        val content = runCatching { Files.readAllBytes(normalizedManifest) }.getOrElse { error ->
-            problems += EternalScriptEnvironmentProblem.Invalid(
-                normalizedManifest,
-                error.message ?: error.javaClass.name
-            )
-            return null
-        }
-        val actualVersion = runCatching { IdeEnvironmentCodec.peekProtocolVersion(content) }.getOrElse { error ->
-            problems += EternalScriptEnvironmentProblem.Invalid(
-                normalizedManifest,
-                error.message ?: error.javaClass.name
-            )
-            return null
-        }
-        if (actualVersion != IdeProtocol.VERSION) {
-            problems += EternalScriptEnvironmentProblem.Incompatible(
-                normalizedManifest,
-                actualVersion,
-                IdeProtocol.VERSION
-            )
-            return null
-        }
-        val environment = runCatching { IdeEnvironmentCodec.decode(content) }.getOrElse { error ->
-            problems += EternalScriptEnvironmentProblem.Invalid(
-                normalizedManifest,
-                error.message ?: error.javaClass.name
-            )
-            return null
-        }
-        if (!compatibleKotlin(environment.kotlinVersion())) {
-            problems += EternalScriptEnvironmentProblem.IncompatibleKotlin(
-                normalizedManifest,
-                environment.kotlinVersion(),
-                KotlinVersion.CURRENT.toString()
-            )
-            return null
-        }
+        val content = runCatching { Files.readAllBytes(normalizedManifest) }.getOrNull() ?: return null
+        val environment = runCatching { IdeEnvironmentCodec.decode(content) }.getOrNull() ?: return null
         val workspaceRoot = normalizedManifest.parent?.parent?.parent?.toAbsolutePath()?.normalize()
             ?: return null
         val scriptRoot = workspaceRoot.resolve(environment.scriptRoot().replace('/', java.io.File.separatorChar))
             .toAbsolutePath()
             .normalize()
         if (!scriptRoot.startsWith(workspaceRoot) || !safeRealDirectory(workspaceRoot, scriptRoot)) {
-            problems += EternalScriptEnvironmentProblem.UnsafeScriptRoot(normalizedManifest, scriptRoot.toString())
             return null
         }
         val missingClasspath = environment.classpath().mapNotNull { uri ->
             runCatching { Path.of(uri).toAbsolutePath().normalize() }.getOrNull()
         }.filterNot { path -> Files.exists(path, LinkOption.NOFOLLOW_LINKS) }
         if (missingClasspath.isNotEmpty()) {
-            problems += EternalScriptEnvironmentProblem.MissingClasspath(normalizedManifest, missingClasspath)
             return null
         }
         val id = sha256(environment.environmentId() + "\u0000" + normalizedManifest.toUri().toASCIIString()).take(16)
@@ -165,13 +110,6 @@ internal class WorkspaceRegistry(
         }
         if (!Files.isDirectory(scriptRoot, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(scriptRoot)) return false
         return runCatching { scriptRoot.toRealPath().startsWith(workspaceRoot.toRealPath()) }.getOrDefault(false)
-    }
-
-    private fun compatibleKotlin(runtimeVersion: String): Boolean {
-        fun majorMinor(value: String): List<Int> = value.substringBefore('-').split('.')
-            .take(2)
-            .mapNotNull(String::toIntOrNull)
-        return majorMinor(runtimeVersion) == SUPPORTED_KOTLIN_MAJOR_MINOR
     }
 
     private fun safePath(file: VirtualFile): Path? = runCatching {
@@ -198,7 +136,6 @@ internal class WorkspaceRegistry(
         const val ENVIRONMENT_FILE_NAME: String = "environment.properties"
         const val MAX_MANIFEST_DEPTH: Int = 24
         const val CANCELLATION_CHECK_MASK: Int = 0x3f
-        val SUPPORTED_KOTLIN_MAJOR_MINOR: List<Int> = listOf(2, 4)
         val EXCLUDED_DIRECTORIES: Set<String> = setOf(".git", ".gradle", "build", "out", ".idea")
     }
 }

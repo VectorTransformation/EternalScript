@@ -1,34 +1,30 @@
 package eternalscript.intellij.model
 
-import com.intellij.lang.LanguageAnnotators
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.components.service
-import com.intellij.refactoring.rename.RenameProcessor
-import com.intellij.refactoring.rename.RenamePsiElementProcessor
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.TempDirTestFixture
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.testFramework.fixtures.impl.TempDirTestFixtureImpl
-import com.intellij.util.containers.MultiMap
 import eternalscript.ide.protocol.IdeEnvironment
 import eternalscript.ide.protocol.IdeEnvironmentCodec
 import eternalscript.ide.protocol.IdeProtocol
-import eternalscript.intellij.diagnostics.EternalScriptConflictAnnotator
 import eternalscript.intellij.resolve.Idea262Facade
-import eternalscript.intellij.refactoring.EternalScriptRenameProcessor
 import org.jetbrains.kotlin.analysis.api.permissions.allowAnalysisOnEdt
 import org.jetbrains.kotlin.analysis.api.permissions.KaAllowAnalysisOnEdt
 import org.jetbrains.kotlin.analysis.api.resolve.extensions.KaResolveExtensionProvider
-import org.jetbrains.kotlin.idea.KotlinLanguage
 import org.jetbrains.kotlin.idea.core.script.v1.ScriptDependencyAware
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
+import org.jetbrains.kotlin.psi.psiUtil.getParentOfType
 import org.jetbrains.kotlin.scripting.definitions.ScriptDefinitionProvider
 import org.jetbrains.kotlin.scripting.definitions.ScriptConfigurationsProvider
 import org.jetbrains.kotlin.scripting.resolve.KtFileScriptSource
@@ -53,15 +49,8 @@ import kotlin.test.assertTrue
 internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
     override fun createTempDirTestFixture(): TempDirTestFixture = TempDirTestFixtureImpl()
 
-    fun testKotlinConflictAnnotatorExtensionCanBeInstantiated() {
-        assertTrue(
-            LanguageAnnotators.INSTANCE.allForLanguage(KotlinLanguage.INSTANCE)
-                .any { annotator -> annotator is EternalScriptConflictAnnotator }
-        )
-    }
-
     @KaAllowAnalysisOnEdt
-    fun testSourceNativeResolutionNavigationUsagesAndRename() {
+    fun testSourceNativeResolutionAndNavigation() {
         val scriptRoot = Path.of(myFixture.tempDirPath).resolve("scripts")
         val provider = myFixture.addFileToProject(
             "scripts/z-provider.eternal.kts",
@@ -106,6 +95,8 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
                 import example.plugin.installedValue
                 import example.plugin.installedValue as SharedInstalledValue
                 import example.star.*
+                import org.bukkit.Bukkit
+                import org.bukkit.event.player.PlayerJoinEvent
 
                 val result = sharedFunction()
                 val internalResult = internalShared
@@ -115,7 +106,6 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
                 val alias: SharedAlias = SharedType()
                 val serverName: String = Bukkit.getName()
                 val eventType = PlayerJoinEvent::class
-                val installedType = InstalledApi::class
                 val sharedImportValue = ImportedPluginApi::class
                 val directImportedFunction = installedValue()
                 val sharedImportedFunction = SharedInstalledValue()
@@ -180,10 +170,10 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
         val definitionImports = selectedDefinition.compilationConfiguration[
             ScriptCompilationConfiguration.defaultImports
         ].orEmpty()
-        assertContains(definitionImports, "org.bukkit.Bukkit")
-        assertContains(definitionImports, "org.bukkit.event.player.PlayerJoinEvent")
-        assertContains(definitionImports, "example.plugin.InstalledApi")
-        assertContains(definitionImports, "example.plugin.DefaultInstalledValue")
+        assertFalse("org.bukkit.Bukkit" in definitionImports)
+        assertFalse("org.bukkit.event.player.PlayerJoinEvent" in definitionImports)
+        assertFalse("example.plugin.InstalledApi" in definitionImports)
+        assertFalse("example.plugin.DefaultInstalledValue" in definitionImports)
         assertFalse("example.plugin.installedValue as SharedInstalledValue" in definitionImports)
         assertFalse("example.plugin.installedValue" in definitionImports)
         assertFalse("example.star.*" in definitionImports)
@@ -213,7 +203,7 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
             )
         } catch (failure: AssertionError) {
             throw AssertionError(
-                failure.message + "\n" + observedConfiguration + "\n" + model.diagnosticsText(),
+                failure.message + "\n" + observedConfiguration + "\n" + model.current(),
                 failure
             )
         }
@@ -226,10 +216,10 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
                 .getScriptCompilationConfiguration(KtFileScriptSource(consumer))
                 ?.valueOrNull()
         )
-        assertContains(loadedConfiguration.defaultImports, "org.bukkit.Bukkit")
-        assertContains(loadedConfiguration.defaultImports, "org.bukkit.event.player.PlayerJoinEvent")
-        assertContains(loadedConfiguration.defaultImports, "example.plugin.InstalledApi")
-        assertContains(loadedConfiguration.defaultImports, "example.plugin.DefaultInstalledValue")
+        assertFalse("org.bukkit.Bukkit" in loadedConfiguration.defaultImports)
+        assertFalse("org.bukkit.event.player.PlayerJoinEvent" in loadedConfiguration.defaultImports)
+        assertFalse("example.plugin.InstalledApi" in loadedConfiguration.defaultImports)
+        assertFalse("example.plugin.DefaultInstalledValue" in loadedConfiguration.defaultImports)
         assertTrue(
             loadedConfiguration.defaultImports.any { imported ->
                 imported.startsWith("eternalscript.ide.synthetic.w") && imported.endsWith(".*")
@@ -283,7 +273,7 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
             )
         } catch (failure: AssertionError) {
             throw AssertionError(
-                failure.message + "\n" + model.diagnosticsText() + "\n" +
+                failure.message + "\n" + model.current() + "\n" +
                     model.current().workspaceFor(provider.virtualFile)?.generatedText,
                 failure
             )
@@ -297,7 +287,6 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
             "decorated",
             "Bukkit",
             "PlayerJoinEvent",
-            "InstalledApi",
             "ImportedPluginApi",
             "installedValue",
             "SharedInstalledValue",
@@ -391,10 +380,11 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
         assertCompletes(consumer, "sharedF", "sharedFunction")
         assertCompletes(consumer, "Bukk", "Bukkit")
         assertCompletes(consumer, "onL", "onLoad")
-        assertDoesNotComplete(consumer, "disabledFileV", "disabledFileValue")
-        assertDoesNotComplete(consumer, "ignoredDirectoryV", "ignoredDirectoryValue")
+        assertCompletes(consumer, "disabledFileV", "disabledFileValue")
+        assertCompletes(consumer, "ignoredDirectoryV", "ignoredDirectoryValue")
         assertCompletes(disabledConsumer, "sharedF", "sharedFunction")
-        assertCompletes(disabledConsumer, "Bukk", "Bukkit")
+        assertAutoImports(disabledConsumer, "Bukk", "Bukkit", "org.bukkit.Bukkit", '\n')
+        assertAutoImports(disabledConsumer, "Bukk", "Bukkit", "org.bukkit.Bukkit", '\t')
         assertCompletes(disabledConsumer, "onL", "onLoad")
         assertCompletes(ignoredDirectoryScript, "sharedF", "sharedFunction")
         assertCompletes(ignoredDirectoryScript, "Bukk", "Bukkit")
@@ -402,10 +392,9 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
         allowAnalysisOnEdt { model.rebuildSynchronouslyForTests() }
 
         val workspace = requireNotNull(model.current().workspaceFor(provider.virtualFile))
-        assertFalse(workspace.activeSourceUrls.contains(disabledConsumer.virtualFile.url))
-        assertFalse(workspace.activeSourceUrls.contains(disabledFileProvider.virtualFile.url))
+        assertTrue(workspace.sourceUrls.contains(disabledConsumer.virtualFile.url))
+        assertTrue(workspace.sourceUrls.contains(disabledFileProvider.virtualFile.url))
         assertTrue(workspace.sourceUrls.contains(ignoredDirectoryScript.virtualFile.url))
-        assertFalse(workspace.activeSourceUrls.contains(ignoredDirectoryScript.virtualFile.url))
         assertEquals(workspace.id, model.current().workspaceFor(ignoredDirectoryScript.virtualFile)?.id)
         val sharedOverlay = workspace.generatedFiles.single()
         assertTrue(sharedOverlay.fileName.startsWith("EternalScriptShared_"))
@@ -421,8 +410,8 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
         assertFalse(sharedOverlay.text.contains("ImportedPluginApi"))
         assertFalse(sharedOverlay.text.contains("SharedInstalledValue"))
         assertFalse(sharedOverlay.text.contains("example.star.*"))
-        assertFalse(workspace.generatedText.contains("disabledFileValue"))
-        assertFalse(workspace.generatedText.contains("ignoredDirectoryValue"))
+        assertContains(workspace.generatedText, "disabledFileValue")
+        assertContains(workspace.generatedText, "ignoredDirectoryValue")
         assertFalse(workspace.generatedText.contains("hiddenValue"))
         workspace.generatedFiles.forEach { generated ->
             assertFalse(scriptRoot.resolve(generated.fileName).exists())
@@ -469,7 +458,7 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
                     )
                 }
             }
-            requireNotNull(model.sourceDeclaration(resolvedFunction))
+            requireNotNull(sourceDeclaration(model, resolvedFunction))
         }
         assertEquals("z-provider.eternal.kts", originalFunction.containingFile.name)
         assertEquals("sharedFunction", originalFunction.name)
@@ -479,7 +468,6 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
             "SharedType",
             "Bukkit",
             "PlayerJoinEvent",
-            "InstalledApi",
             "installedValue",
             "SharedOwner",
             "SharedDerived",
@@ -506,17 +494,27 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
             },
             "A script in a disabled directory must still consume active declarations"
         )
-        assertNull(
+        val disabledFileResolved = assertNotNull(
             allowAnalysisOnEdt {
                 Idea262Facade.resolveReferenceForTest(reference(consumer, "disabledFileValue"))
             },
-            "An active script must not resolve declarations exported by a disabled file"
+            "An active script must resolve declarations from a leading-'-' file"
         )
-        assertNull(
+        assertEquals(
+            requireNotNull(disabledFileProvider.script).declarations.filterIsInstance<KtProperty>()
+                .single { property -> property.name == "disabledFileValue" },
+            sourceDeclaration(model, disabledFileResolved)
+        )
+        val disabledDirectoryResolved = assertNotNull(
             allowAnalysisOnEdt {
                 Idea262Facade.resolveReferenceForTest(reference(consumer, "ignoredDirectoryValue"))
             },
-            "An active script must not resolve declarations exported by a disabled directory"
+            "An active script must resolve declarations below a leading-'-' directory"
+        )
+        assertEquals(
+            requireNotNull(ignoredDirectoryScript.script).declarations.filterIsInstance<KtProperty>()
+                .single { property -> property.name == "ignoredDirectoryValue" },
+            sourceDeclaration(model, disabledDirectoryResolved)
         )
         assertNotNull(
             allowAnalysisOnEdt { Idea262Facade.resolveReferenceForTest(reference(cycleA, "cycleB")) },
@@ -527,45 +525,24 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
             "The second half of a typed SCC did not resolve"
         )
 
-        val usages = allowAnalysisOnEdt {
-            model.findReferences(originalFunction)
-        }
-        assertTrue(
-            usages.any { usage -> usage.element.containingFile.name == "a-consumer.eternal.kts" }
-        )
-        assertTrue(usages.any { usage -> usage.element.containingFile.name == "-disabled.eternal.kts" })
+    }
 
-        val consumerTarget = allowAnalysisOnEdt {
-            model.sourceDeclaration(
-                requireNotNull(Idea262Facade.resolveReferenceForTest(reference(consumer, "sharedFunction")))
-            )
-        }
-        assertEquals(originalFunction, consumerTarget)
-        val renameProcessors = RenamePsiElementProcessor.allForElement(requireNotNull(consumerTarget))
-        assertTrue(
-            renameProcessors.any { processor -> processor is EternalScriptRenameProcessor },
-            "processors=${renameProcessors.joinToString { processor -> processor.javaClass.name }}"
-        )
-        val eternalRename = renameProcessors.filterIsInstance<EternalScriptRenameProcessor>().single()
-        val renameConflicts = MultiMap.createLinkedSet<com.intellij.psi.PsiElement, String>()
-        eternalRename.findExistingNameConflicts(consumerTarget, "collision", renameConflicts)
-        assertFalse(renameConflicts.isEmpty, "A colliding shared declaration rename must be rejected before writing")
-        val disabledRenameConflicts = MultiMap.createLinkedSet<com.intellij.psi.PsiElement, String>()
-        eternalRename.findExistingNameConflicts(
-            consumerTarget,
-            "disabledFunction",
-            disabledRenameConflicts
-        )
-        assertTrue(
-            disabledRenameConflicts.isEmpty,
-            "A declaration exported only by a disabled script must not block an active rename"
-        )
-        RenameProcessor(project, consumerTarget, "renamedFunction", false, false).run()
-
-        assertContains(provider.text, "fun renamedFunction()")
-        assertContains(consumer.text, "renamedFunction()")
-        assertContains(disabledConsumer.text, "renamedFunction()")
-        assertFalse(provider.text.contains("fun sharedFunction()"))
+    private fun sourceDeclaration(
+        model: EternalScriptProjectService,
+        element: PsiElement
+    ): KtNamedDeclaration? {
+        val containingFile = element.containingFile ?: return null
+        val generated = model.current().workspaces.asSequence()
+            .mapNotNull { workspace -> workspace.generatedFile(containingFile.name) }
+            .firstOrNull() ?: return null
+        val declarationName = (element as? KtNamedDeclaration
+            ?: element.getParentOfType<KtNamedDeclaration>(strict = false))?.name
+        val candidates = declarationName?.let { name ->
+            generated.mappings.filter { mapping -> mapping.sourcePointer.element?.name == name }
+        }.orEmpty()
+        return candidates.firstOrNull { mapping -> mapping.range.containsOffset(element.textOffset) }
+            ?.sourcePointer?.element
+            ?: candidates.singleOrNull()?.sourcePointer?.element
     }
 
     private fun installEnvironment(scriptRoot: Path) {
@@ -589,19 +566,10 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
         )
         LocalFileSystem.getInstance().refreshAndFindFileByNioFile(classpathRoot)?.refresh(true, true)
         val environment = IdeEnvironment(
-            IdeProtocol.VERSION,
             UUID.nameUUIDFromBytes(scriptRoot.toString().toByteArray()).toString(),
-            "2.1.0-test",
-            "2.4.10",
             "fixture-environment",
             "scripts",
-            listOf(classpathRoot.toUri()),
-            listOf(
-                "org.bukkit.Bukkit",
-                "org.bukkit.event.player.PlayerJoinEvent",
-                "example.plugin.InstalledApi",
-                "example.plugin.DefaultInstalledValue"
-            )
+            listOf(classpathRoot.toUri())
         )
         val text = String(IdeEnvironmentCodec.encode(environment), StandardCharsets.UTF_8)
         val manifest = myFixture.tempDirFixture.createFile(IdeProtocol.ENVIRONMENT_FILE, text)
@@ -651,7 +619,13 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
         }
     }
 
-    private fun assertDoesNotComplete(file: KtFile, prefix: String, excluded: String) {
+    private fun assertAutoImports(
+        file: KtFile,
+        prefix: String,
+        expected: String,
+        importPath: String,
+        completionChar: Char
+    ) {
         PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
         myFixture.configureFromExistingVirtualFile(file.virtualFile)
         val document = requireNotNull(PsiDocumentManager.getInstance(project).getDocument(file))
@@ -663,12 +637,15 @@ internal class EternalScriptK2IntegrationTest : BasePlatformTestCase() {
                 PsiDocumentManager.getInstance(project).commitDocument(document)
             }
             PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
-            val variants = myFixture.completeBasic()?.map { element -> element.lookupString }.orEmpty()
-            val completedText = document.text.substring(original.length)
-            assertFalse(
-                excluded in variants || excluded in completedText,
-                "$excluded leaked from a disabled script; variants=$variants; inserted=$completedText"
-            )
+            val variants = myFixture.completeBasic().orEmpty()
+            if (myFixture.lookup != null) {
+                val item = variants.firstOrNull { element -> element.lookupString == expected }
+                requireNotNull(item) { "$expected was not offered; variants=${variants.map { it.lookupString }}" }
+                myFixture.lookup.currentItem = item
+                myFixture.finishLookup(completionChar)
+            }
+            PsiDocumentManager.getInstance(project).commitAllDocuments()
+            assertContains(document.text, "import $importPath")
         } finally {
             WriteCommandAction.runWriteCommandAction(project) {
                 document.setText(original)

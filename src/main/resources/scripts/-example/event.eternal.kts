@@ -4,19 +4,13 @@
  */
 
 import org.bukkit.event.EventPriority
+import org.bukkit.event.player.PlayerJoinEvent
+import org.bukkit.event.player.PlayerQuitEvent
 
 on<PlayerJoinEvent>(priority = EventPriority.MONITOR) { event ->
-    feedback(
-        event.player,
-        "Join event observed for ${event.player.name}",
-        ScriptFeedbackLevel.INFO
-    )
+    notify(event.player).info("Join event observed for ${event.player.name}")
 }
 
 on<PlayerQuitEvent>(priority = EventPriority.MONITOR) { event ->
-    feedback(
-        Bukkit.getConsoleSender(),
-        "Quit event observed for ${event.player.name}",
-        ScriptFeedbackLevel.INFO
-    )
+    notify().info("Quit event observed for ${event.player.name}")
 }

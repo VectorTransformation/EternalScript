@@ -2,7 +2,7 @@ package eternalscript.scripting.compilation
 
 import eternalscript.api.script.Script
 import eternalscript.config.PluginPaths
-import eternalscript.scripting.repl.SCRIPT_DEFAULT_IMPORTS
+import eternalscript.scripting.cache.ScriptCacheLayout
 import eternalscript.scripting.repl.SCRIPT_JVM_TARGET
 import eternalscript.scripting.repl.ScriptCompilerConfig
 import eternalscript.scripting.repl.SharedReplSource
@@ -24,6 +24,9 @@ import java.net.URLClassLoader
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Locale
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.invariantSeparatorsPathString
 import kotlin.script.experimental.api.ScriptCompilationConfiguration
@@ -192,13 +195,11 @@ internal object ScriptCompilationEnvironmentFactory {
             .map { file -> file.toPath().toAbsolutePath().normalize().toFile() }
             .distinctBy { file -> file.invariantSeparatorsPath.lowercase(Locale.ROOT) }
             .toList()
-        val imports = SCRIPT_DEFAULT_IMPORTS
-        val classpathDigests = classpath.map { file ->
-            file.invariantSeparatorsPath to digestPath(file.toPath())
-        }
+        val imports = emptyList<String>()
+        val classpathDigests = digestClasspath(classpath)
         val importDigest = Sha256.text(imports.joinToString("\n"))
         val fingerprint = Sha256.text(buildString {
-            appendLine("format=5")
+            appendLine("format=${ScriptCacheLayout.CURRENT_FORMAT}")
             appendLine("compilerAdapter=$K2_REPL_COMPILER_ABI")
             appendLine("pluginVersion=${snapshot.pluginVersion}")
             appendLine("pluginArtifact=${snapshot.pluginArtifact?.invariantSeparatorsPath.orEmpty()}")
@@ -243,6 +244,60 @@ internal object ScriptCompilationEnvironmentFactory {
         )
     }
 
+    fun libraryFingerprint(snapshot: ScriptEnvironmentSnapshot): String = Sha256.text(
+        buildString {
+            snapshot.libraryRoots
+                .map { root -> root.toPath().toAbsolutePath().normalize() }
+                .sorted()
+                .forEach { root ->
+                    append(root.invariantSeparatorsPathString)
+                    append('\u0000')
+                    appendLine(digestPath(root))
+                }
+        }
+    )
+
+    private fun digestClasspath(classpath: List<File>): List<Pair<String, String>> {
+        if (classpath.size < 2) {
+            return classpath.map { file -> file.invariantSeparatorsPath to digestPath(file.toPath()) }
+        }
+        val workerCount = minOf(
+            MAX_DIGEST_WORKERS,
+            Runtime.getRuntime().availableProcessors().coerceAtLeast(1),
+            classpath.size
+        )
+        val executor = Executors.newFixedThreadPool(workerCount) { runnable ->
+            Thread(runnable, "EternalScript-Fingerprint-${digestThreadSequence.incrementAndGet()}").apply {
+                isDaemon = true
+                contextClassLoader = ClassLoader.getSystemClassLoader()
+            }
+        }
+        val futures = mutableListOf<Future<String>>()
+        return try {
+            classpath.forEach { file ->
+                futures += executor.submit<String> { digestPath(file.toPath()) }
+            }
+            classpath.indices.map { index ->
+                classpath[index].invariantSeparatorsPath to futures[index].awaitDigest()
+            }
+        } catch (error: InterruptedException) {
+            futures.forEach { future -> future.cancel(true) }
+            Thread.currentThread().interrupt()
+            throw error
+        } catch (error: Throwable) {
+            futures.forEach { future -> future.cancel(true) }
+            throw error
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    private fun Future<String>.awaitDigest(): String = try {
+        get()
+    } catch (error: ExecutionException) {
+        throw error.cause ?: error
+    }
+
     private fun digestPath(path: Path): String = Sha256.digest { digest ->
         if (Files.isRegularFile(path)) {
             Sha256.update(digest, path)
@@ -262,6 +317,9 @@ internal object ScriptCompilationEnvironmentFactory {
     private fun codeSourceFile(type: Class<*>): File? = runCatching {
         File(type.protectionDomain.codeSource.location.toURI())
     }.getOrNull()
+
+    private const val MAX_DIGEST_WORKERS = 4
+    private val digestThreadSequence = AtomicInteger()
 }
 
 internal fun sourceChainDigest(sources: List<SharedReplSource>): String = Sha256.text(buildString {

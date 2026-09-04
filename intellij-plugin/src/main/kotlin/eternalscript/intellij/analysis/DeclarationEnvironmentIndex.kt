@@ -12,7 +12,7 @@ import eternalscript.intellij.model.EternalScriptRenderedDeclaration
  */
 internal class DeclarationEnvironmentIndex(
     initialAbis: Map<String, EternalScriptFileAbi>,
-    private val visibleUrls: Set<String>
+    private val sourceUrls: Set<String>
 ) {
     private val declarationsByUrl = linkedMapOf<String, List<EternalScriptRenderedDeclaration>>()
     private val declarationsByName = linkedMapOf<
@@ -22,13 +22,13 @@ internal class DeclarationEnvironmentIndex(
 
     init {
         initialAbis.forEach { (url, abi) ->
-            if (url in visibleUrls) replace(url, abi)
+            if (url in sourceUrls) replace(url, abi)
         }
     }
 
     fun replace(url: String, abi: EternalScriptFileAbi) {
         remove(url)
-        if (url !in visibleUrls) return
+        if (url !in sourceUrls) return
         val declarations = abi.callables + abi.classifiers
         declarationsByUrl[url] = declarations
         declarations.groupBy(EternalScriptRenderedDeclaration::name).forEach { (name, named) ->

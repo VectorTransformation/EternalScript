@@ -6,34 +6,20 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record IdeEnvironment(
-    int protocolVersion,
     String environmentId,
-    String runtimePluginVersion,
-    String kotlinVersion,
     String environmentFingerprint,
     String scriptRoot,
-    List<URI> classpath,
-    List<String> defaultImports
+    List<URI> classpath
 ) {
     public IdeEnvironment {
-        if (protocolVersion <= 0) {
-            throw new IllegalArgumentException("protocolVersion must be positive");
-        }
         environmentId = requireUuid(environmentId, "environmentId");
-        runtimePluginVersion = requireText(runtimePluginVersion, "runtimePluginVersion");
-        kotlinVersion = requireText(kotlinVersion, "kotlinVersion");
         environmentFingerprint = requireText(environmentFingerprint, "environmentFingerprint");
         scriptRoot = requireRelativePath(scriptRoot, "scriptRoot");
         classpath = List.copyOf(Objects.requireNonNull(classpath, "classpath"));
-        defaultImports = List.copyOf(Objects.requireNonNull(defaultImports, "defaultImports"));
         if (classpath.size() > IdeProtocol.MAX_COLLECTION_ENTRIES) {
             throw new IllegalArgumentException("classpath has too many entries: " + classpath.size());
         }
-        if (defaultImports.size() > IdeProtocol.MAX_COLLECTION_ENTRIES) {
-            throw new IllegalArgumentException("defaultImports has too many entries: " + defaultImports.size());
-        }
         classpath.forEach(uri -> requireFileUri(uri, "classpath entry"));
-        defaultImports.forEach(value -> requireLine(value, "default import"));
     }
 
     private static String requireUuid(String value, String name) {

@@ -7,11 +7,12 @@ public enum class ScriptEngineState {
 }
 
 public enum class ScriptOperation {
+    CHECK,
     RELOAD,
     RECOMPILE,
-    LOAD,
-    UNLOAD,
-    CLEAR
+    ENABLE,
+    DISABLE,
+    CANCEL
 }
 
 public data class ScriptInfo(

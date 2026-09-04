@@ -9,12 +9,13 @@ import eternalscript.api.ScriptOperationResult
 import eternalscript.api.ScriptOperationStatus
 import eternalscript.api.ScriptSnapshot
 import eternalscript.config.PluginPaths
-import eternalscript.feedback.FeedbackKey
-import eternalscript.feedback.FeedbackLevel
-import eternalscript.feedback.SystemFeedback
-import eternalscript.feedback.feedbackText
-import eternalscript.feedback.systemFeedback
+import eternalscript.messaging.MessageKey
+import eternalscript.messaging.MessageLevel
+import eternalscript.messaging.SystemMessage
+import eternalscript.messaging.messageText
+import eternalscript.messaging.systemMessage
 import eternalscript.ide.EternalScriptIdeEnvironmentPublisher
+import eternalscript.scripting.cache.ScriptCacheLayout
 import eternalscript.scripting.compilation.ScriptCandidateSelection
 import eternalscript.scripting.compilation.ScriptCompilationCoordinator
 import eternalscript.scripting.compilation.ScriptCompilationEnvironmentFactory
@@ -35,31 +36,22 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 internal class ScriptEngine(
     private val plugin: JavaPlugin,
     private val paths: PluginPaths,
     private val sources: ScriptSourceRepository,
-    private val system: (SystemFeedback) -> Unit,
-    private val ideEnvironment: EternalScriptIdeEnvironmentPublisher
+    private val system: (SystemMessage) -> Unit,
+    private val ideEnvironment: EternalScriptIdeEnvironmentPublisher,
+    cacheEnabled: () -> Boolean = { true }
 ) {
-    private data class PendingOperation(
-        val token: Long,
-        val operation: ScriptOperation,
-        val affectedPaths: List<String>,
-        val future: CompletableFuture<ScriptOperationResult>,
-        var requestId: Long? = null,
-        var sourceTransition: ScriptPathTransition? = null
-    )
-
     private val generation = ScriptGenerationState()
     private val commandRegistry = ScriptCommandRegistry(plugin, system)
     private val applier = ScriptGenerationApplier(plugin, generation, commandRegistry, system)
     private val operationDispatcher = ScriptOperationDispatcher(plugin)
     private val operationReporter = ScriptOperationReporter({ generation.revision }, system)
-    private val operationSequence = AtomicLong()
+    private val operations = ScriptOperationTracker()
     private val sourceExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "EternalScript-Sources").apply {
             isDaemon = true
@@ -68,15 +60,13 @@ internal class ScriptEngine(
     }
     private val coordinator = ScriptCompilationCoordinator(
         plugin,
-        paths.scriptCacheV5Directory
+        ScriptCacheLayout.currentDirectory(paths.cacheDirectory),
+        cacheEnabled
     )
     private val publishedSnapshot = AtomicReference(
         ScriptSnapshot(0, ScriptEngineState.STARTING, null, emptyList())
     )
-    private val pendingLock = Any()
     private var engineState = ScriptEngineState.STARTING
-    @Volatile
-    private var pending: PendingOperation? = null
     @Volatile
     private var shuttingDown = false
 
@@ -96,13 +86,26 @@ internal class ScriptEngine(
             return operationFailure(error, ScriptOperation.RELOAD)
         }
         if (candidate.isEmpty()) {
-            coordinator.environmentBlocking(environment).fold(
-                onSuccess = ideEnvironment::publishEnvironmentIfChanged,
-                onFailure = { Unit }
-            )
+            val preparedEnvironment = coordinator.environmentBlocking(environment)
+            preparedEnvironment.onSuccess(ideEnvironment::publishEnvironmentIfChanged)
             engineState = ScriptEngineState.READY
             publishSnapshot()
-            return result(ScriptOperation.RELOAD, ScriptOperationStatus.SUCCESS)
+            return preparedEnvironment.fold(
+                onSuccess = { result(ScriptOperation.RELOAD, ScriptOperationStatus.SUCCESS) },
+                onFailure = { error ->
+                    val diagnostic = ScriptDiagnostic(
+                        "<environment>",
+                        ScriptDiagnosticPhase.COMPILE,
+                        "Kotlin scripting environment preparation failed: ${error.message ?: error.javaClass.name}"
+                    )
+                    logDiagnostic(diagnostic)
+                    result(
+                        ScriptOperation.RELOAD,
+                        ScriptOperationStatus.FAILED,
+                        diagnostics = listOf(diagnostic)
+                    )
+                }
+            )
         }
         val request = coordinator.request(
             activeRevision = generation.revision,
@@ -133,24 +136,92 @@ internal class ScriptEngine(
         return applied.result
     }
 
-    fun reload(): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.RELOAD) { future ->
-        if (rejectIfBusy(ScriptOperation.RELOAD, future)) return@onMain
-        val operation = beginOperation(ScriptOperation.RELOAD, future)
+    fun reload(path: String? = null): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.RELOAD) { future ->
+        if (path != null) {
+            reloadTarget(path, future)
+            return@onMain
+        }
+        val operation = beginOperation(ScriptOperation.RELOAD, future) ?: return@onMain
         readAllAsync(operation) { candidate ->
             submit(operation, candidate)
         }
     }
 
+    fun check(path: String? = null): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.CHECK) { future ->
+        val operation = beginOperation(ScriptOperation.CHECK, future, listOfNotNull(path)) ?: return@onMain
+        readAllAsync(operation) { available ->
+            if (path == null) {
+                submit(operation, available, forceAll = true)
+                return@readAllAsync
+            }
+            resolveTargetAsync(operation, { sources.prepareEnabled(path) }) { transition ->
+                val replacements = available.filter { transition.target.contains(it.name) }
+                if (replacements.isEmpty()) {
+                    finishOperation(operation, result(ScriptOperation.CHECK, ScriptOperationStatus.NOT_FOUND, listOf(path)))
+                    return@resolveTargetAsync
+                }
+                val universe = generation.loaded.associateByTo(linkedMapOf(), LoadedScript::name)
+                replacements.forEach { universe[it.name] = it }
+                submit(
+                    operation,
+                    universe.values.sortedWith(sourceComparator),
+                    forceAll = true,
+                    selection = ScriptCandidateSelection.Load(
+                        replacements.mapTo(linkedSetOf(), LoadedScript::name),
+                        generation.loaded.mapTo(linkedSetOf(), LoadedScript::name)
+                    )
+                )
+            }
+        }
+    }
+
     fun recompile(): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.RECOMPILE) { future ->
-        if (rejectIfBusy(ScriptOperation.RECOMPILE, future)) return@onMain
+        val operation = beginOperation(ScriptOperation.RECOMPILE, future) ?: return@onMain
         val candidate = generation.loaded.map(LoadedScript::withoutRuntime)
-        val operation = beginOperation(ScriptOperation.RECOMPILE, future)
         submit(operation, candidate, forceAll = true)
     }
 
-    fun load(path: String): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.LOAD) { future ->
-        if (rejectIfBusy(ScriptOperation.LOAD, future)) return@onMain
-        val operation = beginOperation(ScriptOperation.LOAD, future, listOf(path))
+    private fun reloadTarget(path: String, future: CompletableFuture<ScriptOperationResult>) {
+        val operation = beginOperation(ScriptOperation.RELOAD, future, listOf(path)) ?: return
+        resolveTargetAsync(operation, { sources.prepareEnabled(path) }) { transition ->
+            val activePaths = generation.loaded.filter { transition.target.contains(it.name) }
+            if (activePaths.isEmpty()) {
+                finishOperation(
+                    operation,
+                    result(ScriptOperation.RELOAD, ScriptOperationStatus.NOT_FOUND, listOf(transition.target.path))
+                )
+                return@resolveTargetAsync
+            }
+            readAllAsync(operation) { available ->
+                val replacements = available.filter { transition.target.contains(it.name) }
+                if (replacements.isEmpty()) {
+                    finishOperation(
+                        operation,
+                        result(ScriptOperation.RELOAD, ScriptOperationStatus.NOT_FOUND, listOf(transition.target.path))
+                    )
+                    return@readAllAsync
+                }
+                val universe = generation.loaded.associateByTo(linkedMapOf(), LoadedScript::name)
+                activePaths.forEach { universe.remove(it.name) }
+                replacements.forEach { universe[it.name] = it }
+                submit(
+                    operation,
+                    universe.values.sortedWith(sourceComparator),
+                    selection = ScriptCandidateSelection.Load(
+                        replacements.mapTo(linkedSetOf(), LoadedScript::name),
+                        generation.loaded.mapTo(linkedSetOf(), LoadedScript::name)
+                    )
+                )
+            }
+        }
+    }
+
+    fun enable(path: String): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.ENABLE) { future ->
+        if (sources.knownTargets().any { it.path == path && it.enabled }) {
+            future.complete(result(ScriptOperation.ENABLE, ScriptOperationStatus.NO_CHANGE, listOf(path)))
+            return@onMain
+        }
+        val operation = beginOperation(ScriptOperation.ENABLE, future, listOf(path)) ?: return@onMain
         resolveTargetAsync(operation, { sources.prepareLoad(path) }) { transition ->
             applyTargetAsync(
                 operation,
@@ -166,7 +237,7 @@ internal class ScriptEngine(
                     }
                     finishOperation(
                         operation,
-                        result(ScriptOperation.LOAD, status, listOf(transition.target.path))
+                        result(ScriptOperation.ENABLE, status, listOf(transition.target.path))
                     )
                     return@applyTargetAsync
                 }
@@ -187,9 +258,8 @@ internal class ScriptEngine(
         }
     }
 
-    fun unload(path: String): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.UNLOAD) { future ->
-        if (rejectIfBusy(ScriptOperation.UNLOAD, future)) return@onMain
-        val operation = beginOperation(ScriptOperation.UNLOAD, future, listOf(path))
+    fun disable(path: String): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.DISABLE) { future ->
+        val operation = beginOperation(ScriptOperation.DISABLE, future, listOf(path)) ?: return@onMain
         resolveTargetAsync(operation, { sources.prepareUnload(path) }) { transition ->
             val unloadPlan = planScriptUnload(
                 generation.compiled?.graph,
@@ -200,7 +270,7 @@ internal class ScriptEngine(
                 finishOperation(
                     operation,
                     result(
-                        ScriptOperation.UNLOAD,
+                        ScriptOperation.DISABLE,
                         ScriptOperationStatus.FAILED,
                         unloadPlan.selectedPaths.sorted(),
                         listOf(
@@ -219,7 +289,7 @@ internal class ScriptEngine(
                 finishOperation(
                     operation,
                     result(
-                        ScriptOperation.UNLOAD,
+                        ScriptOperation.DISABLE,
                         ScriptOperationStatus.FAILED,
                         (unloadPlan.selectedPaths + unloadPlan.blockingConsumers).sorted(),
                         listOf(
@@ -247,7 +317,7 @@ internal class ScriptEngine(
                     }
                     finishOperation(
                         operation,
-                        result(ScriptOperation.UNLOAD, status, listOf(transition.target.path))
+                        result(ScriptOperation.DISABLE, status, listOf(transition.target.path))
                     )
                 } else {
                     submit(operation, candidate)
@@ -256,43 +326,26 @@ internal class ScriptEngine(
         }
     }
 
-    fun clear(): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.CLEAR) { future ->
-        val operation = PendingOperation(
-            operationSequence.incrementAndGet(),
-            ScriptOperation.CLEAR,
-            emptyList(),
-            future
-        )
-        var clearAlreadyRunning = false
-        val cancelled = synchronized(pendingLock) {
-            val current = pending
-            if (current?.operation == ScriptOperation.CLEAR) {
-                clearAlreadyRunning = true
-                null
-            } else {
-                pending = operation
-                current
+    fun cancel(): CompletionStage<ScriptOperationResult> = onMain(ScriptOperation.CANCEL) { future ->
+        when (val cancelled = operations.cancelCancellable()) {
+            CancelOperationResult.Idle -> future.complete(result(ScriptOperation.CANCEL, ScriptOperationStatus.NO_CHANGE))
+            CancelOperationResult.Busy -> future.complete(result(ScriptOperation.CANCEL, ScriptOperationStatus.BUSY))
+            is CancelOperationResult.Cancelled -> {
+                coordinator.invalidate()
+                publishSnapshot()
+                completeDetachedOperation(
+                    cancelled.operation,
+                    result(
+                        cancelled.operation.operation,
+                        ScriptOperationStatus.CANCELLED,
+                        cancelled.operation.affectedPaths
+                    )
+                )
+                future.complete(
+                    result(ScriptOperation.CANCEL, ScriptOperationStatus.SUCCESS, cancelled.operation.affectedPaths)
+                )
             }
         }
-        if (clearAlreadyRunning) {
-            future.complete(result(ScriptOperation.CLEAR, ScriptOperationStatus.BUSY))
-            return@onMain
-        }
-        publishSnapshot()
-        coordinator.invalidate()
-        if (cancelled != null) {
-            completeOperation(
-                cancelled,
-                result(cancelled.operation, ScriptOperationStatus.CANCELLED, cancelled.affectedPaths)
-            )
-        }
-        val affected = if (generation.loaded.isEmpty()) emptyList() else applier.clear()
-        val status = if (cancelled != null || affected.isNotEmpty()) {
-            ScriptOperationStatus.SUCCESS
-        } else {
-            ScriptOperationStatus.NO_CHANGE
-        }
-        finishOperation(operation, result(ScriptOperation.CLEAR, status, affected))
     }
 
     fun shutdown() {
@@ -300,7 +353,7 @@ internal class ScriptEngine(
         if (shuttingDown) return
         shuttingDown = true
         engineState = ScriptEngineState.DISABLED
-        operationDispatcher.close { operation -> result(operation, ScriptOperationStatus.DISABLED) }
+        operationDispatcher.close(::disabledSnapshotResult)
         cancelPending()
         sourceExecutor.shutdownNow()
         runCatching { sourceExecutor.awaitTermination(5, TimeUnit.SECONDS) }
@@ -311,12 +364,12 @@ internal class ScriptEngine(
     }
 
     private fun submit(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         candidate: List<LoadedScript>,
         forceAll: Boolean = false,
         selection: ScriptCandidateSelection = ScriptCandidateSelection.Exact
     ) {
-        if (pending?.token != operation.token || shuttingDown) return
+        if (!operations.isCurrent(operation) || shuttingDown) return
         val environment = captureEnvironment(operation.operation).getOrElse { error ->
             finishOperation(operation, operationFailure(error, operation.operation))
             return
@@ -329,15 +382,15 @@ internal class ScriptEngine(
             environmentSnapshot = environment,
             forceAll = forceAll
         )
-        operation.requestId = request.id
+        if (!operations.markCompiling(operation, request.id)) return
         publishSnapshot()
         coordinator.compileAsync(
             request,
             dispatchFailure = { error ->
-                completeOperationWithoutMain(
+                deferOperationCompletion(
                     operation,
-                    result(
-                        operation.operation,
+                    workerResult(
+                        operation,
                         ScriptOperationStatus.DISABLED,
                         operation.affectedPaths,
                         listOf(
@@ -359,21 +412,18 @@ internal class ScriptEngine(
         operation: ScriptOperation,
         future: CompletableFuture<ScriptOperationResult>,
         requestedPaths: List<String> = emptyList()
-    ): PendingOperation = PendingOperation(
-        operationSequence.incrementAndGet(),
-        operation,
-        requestedPaths,
-        future
-    ).also { started ->
-        synchronized(pendingLock) {
-            check(pending == null) { "Another script operation is already pending" }
-            pending = started
+    ): PendingScriptOperation? {
+        val started = operations.tryBegin(operation, future, requestedPaths)
+        if (started == null) {
+            future.complete(result(operation, ScriptOperationStatus.BUSY))
+        } else {
+            publishSnapshot()
         }
-        publishSnapshot()
+        return started
     }
 
     private fun resolveTargetAsync(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         resolve: () -> ScriptTargetPreparation,
         success: (ScriptPathTransition) -> Unit
     ) {
@@ -382,7 +432,10 @@ internal class ScriptEngine(
                 onSuccess = { target ->
                     when (target) {
                         is ScriptTargetPreparation.Ready -> {
-                            operation.sourceTransition = target.transition
+                            if (!operations.attachTransition(operation, target.transition)) {
+                                target.transition.rollback()
+                                return@fold
+                            }
                             success(target.transition)
                         }
                         is ScriptTargetPreparation.Invalid -> finishOperation(
@@ -418,7 +471,7 @@ internal class ScriptEngine(
     }
 
     private fun <T> applyTargetAsync(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         transition: ScriptPathTransition,
         work: () -> T,
         success: (T) -> Unit
@@ -456,7 +509,7 @@ internal class ScriptEngine(
     }
 
     private fun dispatchOperationToMain(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         description: String,
         block: () -> Unit
     ) {
@@ -471,10 +524,10 @@ internal class ScriptEngine(
                 }
             )
         }.onFailure { error ->
-            completeOperationWithoutMain(
+            deferOperationCompletion(
                 operation,
-                result(
-                    operation.operation,
+                workerResult(
+                    operation,
                     ScriptOperationStatus.DISABLED,
                     operation.affectedPaths,
                     listOf(
@@ -490,7 +543,7 @@ internal class ScriptEngine(
     }
 
     private fun <T> runSourceTask(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         description: String,
         work: () -> T,
         schedulingFailure: (Throwable) -> ScriptOperationResult = { error ->
@@ -502,9 +555,9 @@ internal class ScriptEngine(
             sourceExecutor.execute {
                 val outcome = runCatching(work)
                 if (shuttingDown) {
-                    completeOperationWithoutMain(
+                    deferOperationCompletion(
                         operation,
-                        result(operation.operation, ScriptOperationStatus.DISABLED, operation.affectedPaths)
+                        workerResult(operation, ScriptOperationStatus.DISABLED, operation.affectedPaths)
                     )
                     return@execute
                 }
@@ -518,7 +571,7 @@ internal class ScriptEngine(
     }
 
     private fun readAllAsync(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         success: (List<LoadedScript>) -> Unit
     ) {
         runSourceTask(
@@ -563,27 +616,46 @@ internal class ScriptEngine(
         }
     }
 
-    private fun finishOperation(operation: PendingOperation, operationResult: ScriptOperationResult) {
-        if (!detachPending(operation)) return
-        completeOperation(operation, operationResult)
-    }
-
-    private fun completeOperationWithoutMain(
-        operation: PendingOperation,
+    private fun finishOperation(
+        operation: PendingScriptOperation,
         operationResult: ScriptOperationResult
     ) {
-        if (!detachPending(operation)) return
-        completeOperation(operation, operationResult)
+        if (!operations.detach(operation)) return
+        completeDetachedOperation(operation, operationResult)
     }
 
-    private fun completeOperation(operation: PendingOperation, operationResult: ScriptOperationResult) {
+    private fun deferOperationCompletion(
+        operation: PendingScriptOperation,
+        operationResult: ScriptOperationResult
+    ) {
+        val finalized = operations.finishFromWorker(
+            operation,
+            operationResult,
+            finalize = { terminal ->
+                // The source worker owns path I/O. Roll back an applied rename before exposing a
+                // terminal result when Paper can no longer dispatch the callback to its main thread.
+                finalizeSourceTransition(operation, terminal)
+            },
+            publishDetachedState = {
+                publishedSnapshot.updateAndGet { snapshot ->
+                    if (snapshot.busyOperation == null) snapshot else snapshot.copy(busyOperation = null)
+                }
+            }
+        ) ?: return
+        operation.future.complete(finalized)
+    }
+
+    private fun completeDetachedOperation(
+        operation: PendingScriptOperation,
+        operationResult: ScriptOperationResult
+    ) {
         val finalized = finalizeSourceTransition(operation, operationResult)
         publishSnapshot()
         operation.future.complete(finalized)
     }
 
     private fun finalizeSourceTransition(
-        operation: PendingOperation,
+        operation: PendingScriptOperation,
         operationResult: ScriptOperationResult
     ): ScriptOperationResult {
         val transition = operation.sourceTransition ?: return operationResult
@@ -603,15 +675,17 @@ internal class ScriptEngine(
             if (successful) transition.commit() else transition.rollback()
             normalizedResult
         }.getOrElse { error ->
-            system(
-                systemFeedback(
-                    FeedbackLevel.ERROR,
-                    FeedbackKey.SYSTEM_PATH_ROLLBACK_FAILED,
-                    "target" to transition.target.path,
-                    "error" to (error.message ?: error.javaClass.name),
-                    cause = error
+            runCatching {
+                system(
+                    systemMessage(
+                        MessageLevel.ERROR,
+                        MessageKey.SYSTEM_PATH_ROLLBACK_FAILED,
+                        "target" to transition.target.path,
+                        "error" to (error.message ?: error.javaClass.name),
+                        cause = error
+                    )
                 )
-            )
+            }
             normalizedResult.copy(
                 status = ScriptOperationStatus.FAILED,
                 diagnostics = normalizedResult.diagnostics + ScriptDiagnostic(
@@ -622,32 +696,28 @@ internal class ScriptEngine(
             )
         }
         runCatching(sources::refreshKnownPaths).onFailure { error ->
-            system(
-                systemFeedback(
-                    FeedbackLevel.WARNING,
-                    FeedbackKey.SYSTEM_SUGGESTIONS_REFRESH_FAILED,
-                    "error" to (error.message ?: error.javaClass.name)
+            runCatching {
+                system(
+                    systemMessage(
+                        MessageLevel.WARNING,
+                        MessageKey.SYSTEM_SUGGESTIONS_REFRESH_FAILED,
+                        "error" to (error.message ?: error.javaClass.name)
+                    )
                 )
-            )
+            }
         }
         return finalized
     }
 
-    private fun isPending(operation: PendingOperation): Boolean = pending?.token == operation.token
-
-    private fun detachPending(operation: PendingOperation): Boolean = synchronized(pendingLock) {
-        if (pending?.token != operation.token) return@synchronized false
-        pending = null
-        true
-    }
+    private fun isPending(operation: PendingScriptOperation): Boolean = operations.isCurrent(operation)
 
     private fun handleOutcome(outcome: ScriptCompilationOutcome) {
         assertMainThread()
-        val current = pending
+        val current = operations.current()
+        val matching = current?.takeIf { operation -> operation.requestId == outcome.request.id }
         try {
             handleOutcome(current, outcome)
         } catch (error: Throwable) {
-            current?.let(::detachPending)
             runCatching { coordinator.reject(outcome) }
             if ((outcome as? ScriptCompilationOutcome.Success)?.generation !== generation.compiled) {
                 runCatching { applier.closeOutcomeArtifacts(outcome) }
@@ -658,16 +728,16 @@ internal class ScriptEngine(
                 "Unexpected script operation failure: ${error.message ?: error.javaClass.name}"
             )
             system(
-                systemFeedback(
-                    FeedbackLevel.ERROR,
-                    FeedbackKey.SYSTEM_OPERATION_UNEXPECTED,
-                    "operation" to current?.operation?.feedbackText(),
+                systemMessage(
+                    MessageLevel.ERROR,
+                    MessageKey.SYSTEM_OPERATION_UNEXPECTED,
+                    "operation" to matching?.operation?.messageText(),
                     "error" to (error.message ?: error.javaClass.name),
                     cause = error
                 )
             )
-            current?.takeUnless { operation -> operation.future.isDone }?.let { operation ->
-                completeOperation(
+            matching?.takeUnless { operation -> operation.future.isDone }?.let { operation ->
+                finishOperation(
                     operation,
                     result(
                         operation.operation,
@@ -680,13 +750,13 @@ internal class ScriptEngine(
         }
     }
 
-    private fun handleOutcome(current: PendingOperation?, outcome: ScriptCompilationOutcome) {
-        if (current == null || current.requestId != outcome.request.id || shuttingDown) {
-            runCatching { coordinator.reject(outcome) }
-            applier.closeOutcomeArtifacts(outcome)
-            return
-        }
-        if (!detachPending(current)) {
+    private fun handleOutcome(current: PendingScriptOperation?, outcome: ScriptCompilationOutcome) {
+        if (
+            current == null ||
+            current.requestId != outcome.request.id ||
+            shuttingDown ||
+            !operations.markApplying(current, outcome.request.id)
+        ) {
             runCatching { coordinator.reject(outcome) }
             applier.closeOutcomeArtifacts(outcome)
             return
@@ -698,7 +768,7 @@ internal class ScriptEngine(
         if (outcome !is ScriptCompilationOutcome.Cancelled && !stillCurrent) {
             coordinator.reject(outcome)
             applier.closeOutcomeArtifacts(outcome)
-            completeOperation(
+            finishOperation(
                 current,
                 result(current.operation, ScriptOperationStatus.CANCELLED, current.affectedPaths)
             )
@@ -707,7 +777,7 @@ internal class ScriptEngine(
 
         when (outcome) {
             is ScriptCompilationOutcome.Cancelled -> {
-                completeOperation(
+                finishOperation(
                     current,
                     result(current.operation, ScriptOperationStatus.CANCELLED, current.affectedPaths)
                 )
@@ -717,7 +787,7 @@ internal class ScriptEngine(
                 outcome.environment?.let(ideEnvironment::publishEnvironmentIfChanged)
                 val diagnostic = outcome.diagnostic.toScriptDiagnostic(ScriptDiagnosticPhase.COMPILE)
                 logDiagnostic(diagnostic, outcome.diagnostic)
-                completeOperation(
+                finishOperation(
                     current,
                     result(
                         current.operation,
@@ -729,10 +799,23 @@ internal class ScriptEngine(
             }
             is ScriptCompilationOutcome.Success -> {
                 ideEnvironment.publishEnvironmentIfChanged(outcome.environment)
+                if (current.operation == ScriptOperation.CHECK) {
+                    coordinator.reject(outcome)
+                    applier.closeOutcomeArtifacts(outcome)
+                    finishOperation(
+                        current,
+                        result(
+                            ScriptOperation.CHECK,
+                            ScriptOperationStatus.SUCCESS,
+                            outcome.affectedPaths.ifEmpty { current.affectedPaths }
+                        )
+                    )
+                    return
+                }
                 if (outcome.affectedPaths.isEmpty()) {
                     coordinator.commit(outcome, generation.revision)
                     applier.closeOutcomeArtifacts(outcome)
-                    completeOperation(
+                    finishOperation(
                         current,
                         result(current.operation, ScriptOperationStatus.NO_CHANGE, current.affectedPaths)
                     )
@@ -745,22 +828,22 @@ internal class ScriptEngine(
                     generation.compiled?.let { compiled ->
                         coordinator.publishCache(compiled, outcome.environment) { error ->
                             system(
-                                systemFeedback(
-                                    FeedbackLevel.WARNING,
-                                    FeedbackKey.SYSTEM_CACHE_PUBLISH_FAILED,
+                                systemMessage(
+                                    MessageLevel.WARNING,
+                                    MessageKey.SYSTEM_CACHE_PUBLISH_FAILED,
                                     "error" to (error.message ?: error.javaClass.name)
                                 )
                             )
                         }
                     }
-                    completeOperation(
+                    finishOperation(
                         current,
                         result(current.operation, ScriptOperationStatus.SUCCESS, outcome.affectedPaths)
                     )
                 } else {
                     coordinator.reject(outcome)
                     applied.diagnostics.forEach { diagnostic -> logDiagnostic(diagnostic) }
-                    completeOperation(
+                    finishOperation(
                         current,
                         result(
                             current.operation,
@@ -810,9 +893,9 @@ internal class ScriptEngine(
                     generation.compiled?.let { compiled ->
                         coordinator.publishCache(compiled, outcome.environment) { error ->
                             system(
-                                systemFeedback(
-                                    FeedbackLevel.WARNING,
-                                    FeedbackKey.SYSTEM_CACHE_PUBLISH_FAILED,
+                                systemMessage(
+                                    MessageLevel.WARNING,
+                                    MessageKey.SYSTEM_CACHE_PUBLISH_FAILED,
                                     "error" to (error.message ?: error.javaClass.name)
                                 )
                             )
@@ -899,7 +982,7 @@ internal class ScriptEngine(
         block: (CompletableFuture<ScriptOperationResult>) -> Unit
     ): CompletionStage<ScriptOperationResult> = operationDispatcher.dispatch(
         operation,
-        disabledResult = { disabled -> result(disabled, ScriptOperationStatus.DISABLED) }
+        disabledResult = ::disabledSnapshotResult
     ) { future ->
         if (shuttingDown || engineState == ScriptEngineState.DISABLED) {
             future.complete(result(operation, ScriptOperationStatus.DISABLED))
@@ -910,10 +993,10 @@ internal class ScriptEngine(
                 block(future)
             } catch (error: Throwable) {
                 system(
-                    systemFeedback(
-                        FeedbackLevel.ERROR,
-                        FeedbackKey.SYSTEM_OPERATION_UNEXPECTED,
-                        "operation" to operation.feedbackText(),
+                    systemMessage(
+                        MessageLevel.ERROR,
+                        MessageKey.SYSTEM_OPERATION_UNEXPECTED,
+                        "operation" to operation.messageText(),
                         "error" to (error.message ?: error.javaClass.name),
                         cause = error
                     )
@@ -929,31 +1012,18 @@ internal class ScriptEngine(
                         )
                     )
                 )
-                val started = pending?.takeIf { candidate -> candidate.future === future }
+                val started = operations.findByFuture(future)
                 if (started == null) future.complete(failure) else finishOperation(started, failure)
             }
         }
     }
 
     private fun cancelPending() {
-        val operation = synchronized(pendingLock) {
-            val current = pending ?: return
-            pending = null
-            current
-        }
-        completeOperation(
+        val operation = operations.cancelCurrent() ?: return
+        completeDetachedOperation(
             operation,
             result(operation.operation, ScriptOperationStatus.CANCELLED, operation.affectedPaths)
         )
-    }
-
-    private fun rejectIfBusy(
-        operation: ScriptOperation,
-        future: CompletableFuture<ScriptOperationResult>
-    ): Boolean {
-        if (synchronized(pendingLock) { pending == null }) return false
-        future.complete(result(operation, ScriptOperationStatus.BUSY))
-        return true
     }
 
     private fun publishSnapshot() {
@@ -961,7 +1031,7 @@ internal class ScriptEngine(
             ScriptSnapshot(
                 revision = generation.revision,
                 state = engineState,
-                busyOperation = pending?.operation,
+                busyOperation = operations.current()?.operation,
                 scripts = copyOf(generation.loaded.map { source -> ScriptInfo(source.name) })
             )
         )
@@ -973,6 +1043,33 @@ internal class ScriptEngine(
         affectedPaths: List<String> = emptyList(),
         diagnostics: List<ScriptDiagnostic> = emptyList()
     ): ScriptOperationResult = operationReporter.result(operation, status, affectedPaths, diagnostics)
+
+    /** Builds an off-main terminal result without reading the main-thread generation state. */
+    private fun disabledSnapshotResult(operation: ScriptOperation): ScriptOperationResult = snapshotResult(
+        operation,
+        ScriptOperationStatus.DISABLED
+    )
+
+    /** Builds a worker-owned terminal result without reading the main-thread generation state. */
+    private fun workerResult(
+        operation: PendingScriptOperation,
+        status: ScriptOperationStatus,
+        affectedPaths: List<String> = emptyList(),
+        diagnostics: List<ScriptDiagnostic> = emptyList()
+    ): ScriptOperationResult = snapshotResult(operation.operation, status, affectedPaths, diagnostics)
+
+    private fun snapshotResult(
+        operation: ScriptOperation,
+        status: ScriptOperationStatus,
+        affectedPaths: List<String> = emptyList(),
+        diagnostics: List<ScriptDiagnostic> = emptyList()
+    ): ScriptOperationResult = ScriptOperationResult(
+        operation,
+        status,
+        publishedSnapshot.get().revision,
+        copyOf(affectedPaths),
+        copyOf(diagnostics)
+    )
 
     private fun logDiagnostic(
         diagnostic: ScriptDiagnostic,

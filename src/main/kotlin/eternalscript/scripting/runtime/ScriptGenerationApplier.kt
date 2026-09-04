@@ -2,10 +2,10 @@ package eternalscript.scripting.runtime
 
 import eternalscript.api.ScriptDiagnostic
 import eternalscript.api.ScriptDiagnosticPhase
-import eternalscript.feedback.FeedbackKey
-import eternalscript.feedback.FeedbackLevel
-import eternalscript.feedback.SystemFeedback
-import eternalscript.feedback.systemFeedback
+import eternalscript.messaging.MessageKey
+import eternalscript.messaging.MessageLevel
+import eternalscript.messaging.SystemMessage
+import eternalscript.messaging.systemMessage
 import eternalscript.scripting.compilation.ScriptCompilationEnvironment
 import eternalscript.scripting.compilation.ScriptCompilationOutcome
 import eternalscript.scripting.repl.k2.CompiledComponentGeneration
@@ -18,7 +18,7 @@ internal class ScriptGenerationApplier(
     private val plugin: JavaPlugin,
     private val state: ScriptGenerationState,
     private val commandRegistry: ScriptCommandRegistry,
-    private val system: (SystemFeedback) -> Unit
+    private val system: (SystemMessage) -> Unit
 ) {
     fun apply(
         candidate: List<LoadedScript>,
@@ -27,33 +27,37 @@ internal class ScriptGenerationApplier(
 
     fun clear(): List<String> = commandRegistry.batch {
         val affected = state.loaded.map(LoadedScript::name)
+        val previousEvaluated = state.evaluated
+        val previousCompiled = state.compiled
         disposeEntries(orderedActive(state.loaded, state.compiled).asReversed())
         ReplStateBridge.publish(ReplStateBridge.StateTable())
-        state.evaluated?.close()
-        state.compiled?.close()
         state.evaluated = null
         state.compiled = null
         state.loaded.clear()
         state.environment = null
         state.revision++
+        retireEvaluatedSafely(previousEvaluated)
+        closeCompiledSafely(previousCompiled)
         affected
     }
 
     fun shutdown() {
         commandRegistry.batch {
+            val previousEvaluated = state.evaluated
+            val previousCompiled = state.compiled
             disposeEntries(orderedActive(state.loaded, state.compiled).asReversed())
             ReplStateBridge.publish(ReplStateBridge.StateTable())
-            state.evaluated?.close()
-            state.compiled?.close()
             state.evaluated = null
             state.compiled = null
             state.loaded.clear()
             state.environment = null
+            retireEvaluatedSafely(previousEvaluated)
+            closeCompiledSafely(previousCompiled)
         }
     }
 
     fun closeOutcomeArtifacts(outcome: ScriptCompilationOutcome) {
-        if (outcome is ScriptCompilationOutcome.Success) runCatching(outcome.generation::close)
+        if (outcome is ScriptCompilationOutcome.Success) closeCompiledSafely(outcome.generation)
     }
 
     private fun applyInBatch(
@@ -68,15 +72,16 @@ internal class ScriptGenerationApplier(
         val previousStateTable = previousEvaluated?.state?.copy() ?: ReplStateBridge.snapshot()
         val candidateEnvironment = outcome.environment.retained()
         val evaluatedResult = ComponentGenerationEvaluator.evaluate(
-            outcome.generation,
-            affected,
-            outcome.environment.runtimeClassLoader,
-            previousEvaluated,
-            candidateEnvironment::close
+            compiled = outcome.generation,
+            affectedPaths = affected,
+            baseClassLoader = outcome.environment.runtimeClassLoader,
+            previous = previousEvaluated,
+            onDisposed = candidateEnvironment::close,
+            onDisposalFailure = ::reportGenerationCleanupFailure
         )
         val candidateEvaluated = when (evaluatedResult) {
             is ComponentEvaluationResult.Failure -> {
-                outcome.generation.close()
+                closeCompiledSafely(outcome.generation)
                 val diagnostic = ScriptDiagnostic(
                     evaluatedResult.diagnostic.source,
                     ScriptDiagnosticPhase.EVALUATE,
@@ -114,6 +119,7 @@ internal class ScriptGenerationApplier(
             val active = try {
                 ActiveScript(
                     evaluated.script,
+                    source.name,
                     plugin,
                     commandRegistry,
                     candidateEvaluated.executionContext
@@ -135,8 +141,8 @@ internal class ScriptGenerationApplier(
                 .filter { entry -> entry.name in affected }
             disposeEntries(stagedAffected.asReversed())
             disposeEvaluatedDeclarations(candidateEvaluated, affected)
-            candidateEvaluated.close()
-            outcome.generation.close()
+            retireEvaluatedSafely(candidateEvaluated)
+            closeCompiledSafely(outcome.generation)
             return GenerationApplyResult(false, listOf(diagnostic))
         }
 
@@ -168,14 +174,15 @@ internal class ScriptGenerationApplier(
         stagedByPath.values.forEach { entry ->
             entry.active?.updateExecutionContext(candidateEvaluated.executionContext)
         }
-        previousEvaluated?.close()
-        previousCompiled?.close()
+        val committedLoaded = candidate.map { source -> requireNotNull(stagedByPath[source.name]) }
         state.loaded.clear()
-        state.loaded += candidate.map { source -> requireNotNull(stagedByPath[source.name]) }
+        state.loaded += committedLoaded
         state.compiled = outcome.generation
         state.evaluated = candidateEvaluated
         state.environment = outcome.environment
         state.revision++
+        retireEvaluatedSafely(previousEvaluated)
+        closeCompiledSafely(previousCompiled)
         return GenerationApplyResult(true, emptyList())
     }
 
@@ -194,19 +201,19 @@ internal class ScriptGenerationApplier(
         disposeEntries(candidateAffected.asReversed())
         disposeEvaluatedDeclarations(candidateEvaluated, candidateAffected.map(LoadedScript::name).toSet())
         ReplStateBridge.publish(previousStateTable)
-        candidateEvaluated.close()
-        outcome.generation.close()
+        retireEvaluatedSafely(candidateEvaluated)
+        closeCompiledSafely(outcome.generation)
 
         if (previousCompiled == null || previousEvaluated == null) {
             disposeEntries(previousLoaded.filterNot { entry -> entry.name in affectedPaths }.asReversed())
             ReplStateBridge.publish(ReplStateBridge.StateTable())
-            previousEvaluated?.close()
-            previousCompiled?.close()
             state.loaded.clear()
             state.compiled = null
             state.evaluated = null
             state.environment = null
             state.revision++
+            retireEvaluatedSafely(previousEvaluated)
+            closeCompiledSafely(previousCompiled)
             return GenerationApplyResult(
                 false,
                 listOf(
@@ -229,11 +236,12 @@ internal class ScriptGenerationApplier(
 
         val rollbackEnvironment = previousEnvironment?.retained()
         val restoredResult = ComponentGenerationEvaluator.evaluate(
-            previousCompiled,
-            affectedPaths,
-            previousEnvironment?.runtimeClassLoader ?: plugin.javaClass.classLoader,
-            previousEvaluated,
-            rollbackEnvironment?.let { retained -> retained::close } ?: {}
+            compiled = previousCompiled,
+            affectedPaths = affectedPaths,
+            baseClassLoader = previousEnvironment?.runtimeClassLoader ?: plugin.javaClass.classLoader,
+            previous = previousEvaluated,
+            onDisposed = rollbackEnvironment?.let { retained -> retained::close } ?: {},
+            onDisposalFailure = ::reportGenerationCleanupFailure
         )
         val restoredEvaluated = (restoredResult as? ComponentEvaluationResult.Success)?.generation
         var restoreFailure = (restoredResult as? ComponentEvaluationResult.Failure)?.diagnostic?.let { diagnostic ->
@@ -264,6 +272,7 @@ internal class ScriptGenerationApplier(
                         runCatching {
                             ActiveScript(
                                 evaluated.script,
+                                old.name,
                                 plugin,
                                 commandRegistry,
                                 restoredEvaluated.executionContext
@@ -294,35 +303,39 @@ internal class ScriptGenerationApplier(
             restoredByPath.values.forEach { entry ->
                 entry.active?.updateExecutionContext(restoredEvaluated.executionContext)
             }
-            previousEvaluated.close()
+            val restoredLoaded = previousLoaded.map { old -> requireNotNull(restoredByPath[old.name]) }
             state.loaded.clear()
-            state.loaded += previousLoaded.map { old -> requireNotNull(restoredByPath[old.name]) }
+            state.loaded += restoredLoaded
             state.compiled = previousCompiled
             state.evaluated = restoredEvaluated
             state.environment = previousEnvironment
+            retireEvaluatedSafely(previousEvaluated)
         } else {
             disposeEntries(restoredAffected.asReversed())
             restoredEvaluated?.let { evaluated ->
                 disposeEvaluatedDeclarations(evaluated, affectedPaths)
             }
-            restoredEvaluated?.close()
+            retireEvaluatedSafely(restoredEvaluated)
             val retainedPaths = previousLoaded.asSequence()
                 .map(LoadedScript::name)
                 .filterNot(affectedPaths::contains)
                 .toSet()
             val degraded = runCatching {
                 val degradedCompiled = previousCompiled.retainedSubset(retainedPaths)
-                val degradedEnvironment = previousEnvironment?.retained()
                 try {
+                    val degradedEnvironment = previousEnvironment?.retained()
                     val degradedEvaluated = ComponentGenerationEvaluator.retainedSubset(
-                        previousEvaluated,
-                        degradedCompiled,
-                        retainedPaths,
-                        degradedEnvironment?.let { retained -> retained::close } ?: {}
+                        previous = previousEvaluated,
+                        compiled = degradedCompiled,
+                        paths = retainedPaths,
+                        onDisposed = degradedEnvironment?.let { retained -> retained::close } ?: {},
+                        onDisposalFailure = ::reportGenerationCleanupFailure
                     )
                     degradedCompiled to degradedEvaluated
                 } catch (error: Throwable) {
-                    degradedCompiled.close()
+                    runCatching(degradedCompiled::close).exceptionOrNull()?.let { cleanupFailure ->
+                        if (cleanupFailure !== error) error.addSuppressed(cleanupFailure)
+                    }
                     throw error
                 }
             }
@@ -332,22 +345,22 @@ internal class ScriptGenerationApplier(
                     entry.active?.updateExecutionContext(degradedEvaluated.executionContext)
                 }
                 ReplStateBridge.publish(degradedEvaluated.state)
-                previousEvaluated.close()
-                previousCompiled.close()
                 state.loaded.clear()
                 state.loaded += retainedLoaded
                 state.compiled = degradedCompiled
                 state.evaluated = degradedEvaluated
                 state.environment = previousEnvironment
+                retireEvaluatedSafely(previousEvaluated)
+                closeCompiledSafely(previousCompiled)
             }.onFailure { error ->
                 disposeEntries(previousLoaded.filterNot { entry -> entry.name in affectedPaths }.asReversed())
                 ReplStateBridge.publish(ReplStateBridge.StateTable())
-                previousEvaluated.close()
-                previousCompiled.close()
                 state.loaded.clear()
                 state.compiled = null
                 state.evaluated = null
                 state.environment = null
+                retireEvaluatedSafely(previousEvaluated)
+                closeCompiledSafely(previousCompiled)
                 val degradedFailure = failure(
                     affectedPaths.firstOrNull() ?: "<rollback>",
                     ScriptDiagnosticPhase.ROLLBACK,
@@ -397,15 +410,7 @@ internal class ScriptGenerationApplier(
         entries.forEach { entry ->
             entry.active?.let { active ->
                 runCatching(active::dispose).onFailure { error ->
-                    system(
-                        systemFeedback(
-                            FeedbackLevel.WARNING,
-                            FeedbackKey.SYSTEM_SCRIPT_CLEANUP_FAILED,
-                            "source" to entry.name,
-                            "error" to (error.message ?: error.javaClass.name),
-                            cause = error
-                        )
-                    )
+                    reportCleanupFailure(entry.name, error)
                     if (first == null) {
                         first = ScriptDiagnostic(
                             entry.name,
@@ -423,26 +428,7 @@ internal class ScriptGenerationApplier(
         entries.forEach { entry ->
             entry.active?.let { active ->
                 runCatching(active::dispose).onFailure { error ->
-                    system(
-                        systemFeedback(
-                            FeedbackLevel.WARNING,
-                            FeedbackKey.SYSTEM_SCRIPT_CLEANUP_FAILED,
-                            "source" to entry.name,
-                            "error" to (error.message ?: error.javaClass.name),
-                            cause = error
-                        )
-                    )
-                    error.suppressed.forEach { suppressed ->
-                        system(
-                            systemFeedback(
-                                FeedbackLevel.WARNING,
-                                FeedbackKey.SYSTEM_SCRIPT_CLEANUP_ADDITIONAL,
-                                "source" to entry.name,
-                                "error" to (suppressed.message ?: suppressed.javaClass.name),
-                                cause = suppressed
-                            )
-                        )
-                    }
+                    reportCleanupFailure(entry.name, error)
                 }
             }
         }
@@ -461,28 +447,50 @@ internal class ScriptGenerationApplier(
                     evaluated.executionContext.executeOrNull(evaluatedScript.script::disposeDeclarations)
                         ?: evaluatedScript.script.disposeDeclarations()
                 }.onFailure { error ->
-                    system(
-                        systemFeedback(
-                            FeedbackLevel.WARNING,
-                            FeedbackKey.SYSTEM_SCRIPT_CLEANUP_FAILED,
-                            "source" to evaluatedScript.compiled.source.name,
-                            "error" to (error.message ?: error.javaClass.name),
-                            cause = error
-                        )
-                    )
-                    error.suppressed.forEach { suppressed ->
-                        system(
-                            systemFeedback(
-                                FeedbackLevel.WARNING,
-                                FeedbackKey.SYSTEM_SCRIPT_CLEANUP_ADDITIONAL,
-                                "source" to evaluatedScript.compiled.source.name,
-                                "error" to (suppressed.message ?: suppressed.javaClass.name),
-                                cause = suppressed
-                            )
-                        )
-                    }
+                    reportCleanupFailure(evaluatedScript.compiled.source.name, error)
                 }
             }
+    }
+
+    private fun retireEvaluatedSafely(generation: EvaluatedComponentGeneration?) {
+        generation ?: return
+        runCatching(generation::close).onFailure(::reportGenerationCleanupFailure)
+    }
+
+    private fun closeCompiledSafely(generation: CompiledComponentGeneration?) {
+        generation ?: return
+        runCatching(generation::close).onFailure(::reportGenerationCleanupFailure)
+    }
+
+    private fun reportGenerationCleanupFailure(error: Throwable) {
+        reportCleanupFailure("<generation>", error)
+    }
+
+    private fun reportCleanupFailure(source: String, error: Throwable) {
+        runCatching {
+            system(
+                systemMessage(
+                    MessageLevel.WARNING,
+                    MessageKey.SYSTEM_SCRIPT_CLEANUP_FAILED,
+                    "source" to source,
+                    "error" to (error.message ?: error.javaClass.name),
+                    cause = error
+                )
+            )
+        }
+        error.suppressed.forEach { suppressed ->
+            runCatching {
+                system(
+                    systemMessage(
+                        MessageLevel.WARNING,
+                        MessageKey.SYSTEM_SCRIPT_CLEANUP_ADDITIONAL,
+                        "source" to source,
+                        "error" to (suppressed.message ?: suppressed.javaClass.name),
+                        cause = suppressed
+                    )
+                )
+            }
+        }
     }
 
     private fun orderedActive(
@@ -500,9 +508,9 @@ internal class ScriptGenerationApplier(
         error: Throwable
     ): ScriptDiagnostic {
         system(
-            systemFeedback(
-                FeedbackLevel.ERROR,
-                FeedbackKey.SYSTEM_SCRIPT_FAILURE_CAUSE,
+            systemMessage(
+                MessageLevel.ERROR,
+                MessageKey.SYSTEM_SCRIPT_FAILURE_CAUSE,
                 "source" to source,
                 "message" to message,
                 cause = error
@@ -514,9 +522,9 @@ internal class ScriptGenerationApplier(
     private fun logCause(diagnostic: eternalscript.scripting.repl.SharedReplDiagnostic) {
         diagnostic.cause?.let { error ->
             system(
-                systemFeedback(
-                    FeedbackLevel.ERROR,
-                    FeedbackKey.SYSTEM_SCRIPT_FAILURE_CAUSE,
+                systemMessage(
+                    MessageLevel.ERROR,
+                    MessageKey.SYSTEM_SCRIPT_FAILURE_CAUSE,
                     "source" to diagnostic.source,
                     "message" to diagnostic.message,
                     cause = error

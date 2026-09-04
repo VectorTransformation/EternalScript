@@ -12,6 +12,9 @@ internal class ScriptSourceRepository(
     @Volatile
     private var knownScriptPaths: List<String> = emptyList()
 
+    @Volatile
+    private var knownScriptTargets: List<DiscoveredScriptTarget> = emptyList()
+
     fun installBundledResources() {
         installDirectory("scripts", paths.scriptsDirectory) { name ->
             name.endsWith(".$ETERNAL_SCRIPT_EXTENSION")
@@ -21,12 +24,20 @@ internal class ScriptSourceRepository(
     }
 
     fun all(): List<ScriptSourceFile> {
-        val result = readScriptSources(paths.scriptsDirectory)
-        refreshKnownPaths()
-        return result
+        val scan = scanScriptSources(paths.scriptsDirectory)
+        updateKnownTargets(scan.targets)
+        return scan.sources
     }
 
-    fun knownPaths(): List<String> = knownScriptPaths
+    fun knownPaths(): List<String> {
+        refreshKnownPaths()
+        return knownScriptPaths
+    }
+
+    fun knownTargets(): List<DiscoveredScriptTarget> {
+        refreshKnownPaths()
+        return knownScriptTargets
+    }
 
     fun validate(path: String): ScriptPathResult = validateScriptPath(path)
 
@@ -36,8 +47,25 @@ internal class ScriptSourceRepository(
     fun prepareUnload(path: String): ScriptTargetPreparation =
         prepareScriptUnloadTarget(paths.scriptsDirectory, path)
 
+    fun prepareEnabled(path: String): ScriptTargetPreparation {
+        val canonical = when (val validation = validateScriptTargetPath(path)) {
+            is ScriptPathResult.Valid -> validation.path
+            is ScriptPathResult.Invalid -> return ScriptTargetPreparation.Invalid(validation.reason)
+        }
+        val target = knownTargets().firstOrNull { it.path == canonical && it.enabled }
+            ?: return ScriptTargetPreparation.NotFound(canonical)
+        return ScriptTargetPreparation.Ready(
+            ScriptPathTransition(ScriptTarget(target.path, target.kind), null, null)
+        )
+    }
+
     fun refreshKnownPaths() {
-        knownScriptPaths = discoverScriptTargets(paths.scriptsDirectory)
+        updateKnownTargets(discoverScriptTargetEntries(paths.scriptsDirectory))
+    }
+
+    private fun updateKnownTargets(targets: List<DiscoveredScriptTarget>) {
+        knownScriptTargets = targets
+        knownScriptPaths = knownScriptTargets.map(DiscoveredScriptTarget::path)
     }
 
     private fun installDirectory(

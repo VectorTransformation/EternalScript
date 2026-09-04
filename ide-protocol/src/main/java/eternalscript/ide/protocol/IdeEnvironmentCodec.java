@@ -25,18 +25,7 @@ public final class IdeEnvironmentCodec {
     private IdeEnvironmentCodec() {}
 
     public static byte[] encode(IdeEnvironment environment) {
-        return encode(environment, Map.of());
-    }
-
-    public static byte[] encode(IdeEnvironment environment, Map<String, String> optionalValues) {
         Map<String, String> values = encodedValues(environment);
-        optionalValues.forEach((key, value) -> {
-            if (!key.startsWith("x.") || !key.matches("[A-Za-z0-9_.-]+")) {
-                throw new IllegalArgumentException("Optional IDE environment keys must start with x.: " + key);
-            }
-            if (values.containsKey(key)) throw new IllegalArgumentException("Duplicate IDE environment key: " + key);
-            putValue(values, key, value);
-        });
         String hash = contentHash(values);
         StringBuilder output = new StringBuilder(1024);
         new TreeMap<>(values).forEach((key, value) -> appendRaw(output, key, value));
@@ -64,24 +53,7 @@ public final class IdeEnvironmentCodec {
         }
     }
 
-    public static int peekProtocolVersion(byte[] content) {
-        if (content.length > IdeProtocol.MAX_ENVIRONMENT_BYTES) {
-            throw new IllegalArgumentException("IDE environment exceeds " + IdeProtocol.MAX_ENVIRONMENT_BYTES + " bytes");
-        }
-        try {
-            String decoded = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(content))
-                .toString();
-            Map<String, String> values = readValues(new StringReader(decoded));
-            return number(values, "protocolVersion");
-        } catch (CharacterCodingException error) {
-            throw new IllegalArgumentException("IDE environment is not valid UTF-8", error);
-        }
-    }
-
-    /** Returns the normalized, verified hash embedded in a valid v3 manifest. */
+    /** Returns the normalized, verified hash embedded in a valid manifest. */
     public static String verifiedContentHash(byte[] content) {
         if (content.length > IdeProtocol.MAX_ENVIRONMENT_BYTES) {
             throw new IllegalArgumentException("IDE environment exceeds " + IdeProtocol.MAX_ENVIRONMENT_BYTES + " bytes");
@@ -116,10 +88,7 @@ public final class IdeEnvironmentCodec {
             throw new IllegalArgumentException("IDE environment content hash does not match");
         }
 
-        int protocolVersion = number(values, "protocolVersion");
         String environmentId = value(values, "environmentId");
-        String runtimePluginVersion = value(values, "runtimePluginVersion");
-        String kotlinVersion = value(values, "kotlinVersion");
         String environmentFingerprint = value(values, "environmentFingerprint");
         String scriptRoot = value(values, "scriptRoot");
         List<URI> classpath = new ArrayList<>();
@@ -127,46 +96,25 @@ public final class IdeEnvironmentCodec {
         for (int index = 0; index < classpathCount; index++) {
             classpath.add(URI.create(value(values, "classpath." + index)));
         }
-        List<String> defaultImports = new ArrayList<>();
-        int importCount = count(values, "defaultImports.count");
-        for (int index = 0; index < importCount; index++) {
-            defaultImports.add(value(values, "defaultImports." + index));
-        }
-        values.entrySet().removeIf(entry -> {
-            if (!entry.getKey().startsWith("x.")) return false;
-            decodeValue(entry.getValue(), entry.getKey());
-            return true;
-        });
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("Unknown IDE environment keys: " + values.keySet());
         }
         return new IdeEnvironment(
-            protocolVersion,
             environmentId,
-            runtimePluginVersion,
-            kotlinVersion,
             environmentFingerprint,
             scriptRoot,
-            classpath,
-            defaultImports
+            classpath
         );
     }
 
     private static Map<String, String> encodedValues(IdeEnvironment environment) {
         Map<String, String> values = new LinkedHashMap<>();
-        putNumber(values, "protocolVersion", environment.protocolVersion());
         putValue(values, "environmentId", environment.environmentId());
-        putValue(values, "runtimePluginVersion", environment.runtimePluginVersion());
-        putValue(values, "kotlinVersion", environment.kotlinVersion());
         putValue(values, "environmentFingerprint", environment.environmentFingerprint());
         putValue(values, "scriptRoot", environment.scriptRoot());
         putNumber(values, "classpath.count", environment.classpath().size());
         for (int index = 0; index < environment.classpath().size(); index++) {
             putValue(values, "classpath." + index, environment.classpath().get(index).toASCIIString());
-        }
-        putNumber(values, "defaultImports.count", environment.defaultImports().size());
-        for (int index = 0; index < environment.defaultImports().size(); index++) {
-            putValue(values, "defaultImports." + index, environment.defaultImports().get(index));
         }
         return values;
     }

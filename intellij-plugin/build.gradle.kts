@@ -7,7 +7,11 @@ plugins {
 }
 
 group = "io.github.vectortransformation.eternalscript"
-version = "2.1.3"
+val idePluginVersion = providers.gradleProperty("idePluginVersion").get()
+val javaVersion = providers.gradleProperty("javaVersion").map(String::toInt).get()
+val ideaVersion = providers.gradleProperty("ideaVersion").get()
+val ideaBuild = providers.gradleProperty("ideaBuild").get()
+version = idePluginVersion
 
 repositories {
     mavenCentral()
@@ -22,7 +26,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     intellijPlatform {
-        intellijIdea("2026.2.1")
+        intellijIdea(ideaVersion)
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
         testFramework(TestFrameworkType.Platform)
@@ -40,8 +44,8 @@ intellijPlatform {
         name = "EternalScript"
         version = project.version.toString()
         ideaVersion {
-            sinceBuild = "262"
-            untilBuild = "262.*"
+            sinceBuild = ideaBuild
+            untilBuild = ideaBuild
         }
     }
 
@@ -53,14 +57,14 @@ intellijPlatform {
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    toolchain.languageVersion = JavaLanguageVersion.of(javaVersion)
 }
 
 kotlin {
     explicitApi()
-    jvmToolchain(25)
+    jvmToolchain(javaVersion)
     compilerOptions {
-        jvmTarget = JvmTarget.JVM_25
+        jvmTarget = JvmTarget.fromTarget(javaVersion.toString())
         languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_4)
         apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_4)
         freeCompilerArgs.addAll(

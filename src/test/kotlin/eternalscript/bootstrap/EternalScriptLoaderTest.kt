@@ -37,6 +37,7 @@ class EternalScriptLoaderTest {
             "org.jetbrains.kotlin:kotlin-metadata-jvm:${KotlinCompilerVersion.VERSION}" in libraries
         )
         assertTrue("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0" in libraries)
+        assertEquals(1, libraries.count { coordinate -> coordinate == "org.xerial:sqlite-jdbc:3.53.4.0" })
         assertFalse(
             libraries.any { coordinate ->
                 coordinate.startsWith("org.jetbrains.kotlinx:kotlinx-coroutines-core:")

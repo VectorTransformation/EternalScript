@@ -19,7 +19,27 @@ internal class ScriptComponentCompiler(
         analyzedGraph: ScriptDependencyGraph? = null,
         analyzedCount: Int = candidateSources.size
     ): ComponentCompilationResult {
-        val graph = analyzedGraph ?: run {
+        val sourceChanges = changedPaths(previous?.sources.orEmpty(), candidateSources)
+        val canCompileWholeGeneration = analyzedGraph == null &&
+            forcedPaths.isEmpty() &&
+            (
+                previous == null ||
+                    forceAll ||
+                    (previous.graph.components.size == 1 && sourceChanges.isNotEmpty())
+            )
+        val wholeBatch = if (canCompileWholeGeneration) {
+            val result = BatchK2Compiler(
+                componentConfiguration(emptyList()),
+                batchScriptingHostConfiguration(baseClassLoader = baseClassLoader)
+            ).use { compiler -> compiler.compile(candidateSources) }
+            when (result) {
+                is BatchCompilationResult.Success -> result.generation
+                is BatchCompilationResult.Failure -> return ComponentCompilationResult.Failure(result.diagnostic)
+            }
+        } else {
+            null
+        }
+        val graph = analyzedGraph ?: wholeBatch?.graph ?: run {
             val analysis = BatchK2Compiler(
                 baseConfiguration,
                 batchScriptingHostConfiguration(baseClassLoader = baseClassLoader)
@@ -37,7 +57,7 @@ internal class ScriptComponentCompiler(
                 forcedPaths.filterNot(graph.paths::contains).sorted().joinToString()
         }
 
-        val changedPaths = changedPaths(previous?.sources.orEmpty(), candidateSources).toMutableSet()
+        val changedPaths = sourceChanges.toMutableSet()
         changedPaths += forcedPaths
         if (forceAll || previous == null) {
             changedPaths += previous?.graph?.paths.orEmpty()
@@ -108,17 +128,19 @@ internal class ScriptComponentCompiler(
                     availableProviders.map { provider -> provider.artifact.jar.toFile() }
                 )
                 val descriptors = availableProviders.flatMap(CompiledComponent::descriptors)
-                val result = BatchK2Compiler(
-                    configuration,
-                    batchScriptingHostConfiguration(descriptors, baseClassLoader)
-                ).use { compiler ->
-                    compiler.compile(
-                        componentsToCompile.flatMap { component -> component.paths.map(sourceByPath::getValue) }
-                    )
-                }
-                val batchGeneration = when (result) {
-                    is BatchCompilationResult.Success -> result.generation
-                    is BatchCompilationResult.Failure -> return failureAndClose(compiled, result.diagnostic)
+                val batchGeneration = wholeBatch ?: run {
+                    val result = BatchK2Compiler(
+                        configuration,
+                        batchScriptingHostConfiguration(descriptors, baseClassLoader)
+                    ).use { compiler ->
+                        compiler.compile(
+                            componentsToCompile.flatMap { component -> component.paths.map(sourceByPath::getValue) }
+                        )
+                    }
+                    when (result) {
+                        is BatchCompilationResult.Success -> result.generation
+                        is BatchCompilationResult.Failure -> return failureAndClose(compiled, result.diagnostic)
+                    }
                 }
                 val scriptByPath = batchGeneration.scripts.associateBy { script -> script.source.name }
                 componentsToCompile.forEach { component ->

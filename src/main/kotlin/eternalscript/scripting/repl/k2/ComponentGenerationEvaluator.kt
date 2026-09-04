@@ -2,10 +2,13 @@ package eternalscript.scripting.repl.k2
 
 import eternalscript.api.script.Script
 import eternalscript.scripting.repl.SharedReplDiagnostic
+import eternalscript.scripting.runtime.CleanupFailureCollector
 import eternalscript.scripting.runtime.ReplStateBridge
 import eternalscript.scripting.runtime.ScriptExecutionContext
 import java.lang.reflect.InvocationTargetException
 import java.net.URLClassLoader
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 internal sealed interface ComponentEvaluationResult {
@@ -76,7 +79,8 @@ internal object ComponentGenerationEvaluator {
         previous: EvaluatedComponentGeneration,
         compiled: CompiledComponentGeneration,
         paths: Collection<String>,
-        onDisposed: () -> Unit = {}
+        onDisposed: () -> Unit = {},
+        onDisposalFailure: (Throwable) -> Unit = {}
     ): EvaluatedComponentGeneration {
         var executionArtifacts: CompiledComponentGeneration? = null
         val retainedLoaders = linkedMapOf<String, ManagedComponentClassLoader>()
@@ -94,22 +98,18 @@ internal object ComponentGenerationEvaluator {
             }
             val ownedArtifacts = requireNotNull(executionArtifacts)
             val ownedLoaders = retainedLoaders.toMap()
-            val executionContext = ScriptExecutionContext(state) {
-                try {
-                    ownedLoaders.values.toSet().forEach(ManagedComponentClassLoader::close)
-                } finally {
-                    try {
-                        ownedArtifacts.close()
-                    } finally {
-                        onDisposed()
-                    }
-                }
-            }
+            val executionContext = ScriptExecutionContext(
+                state = state,
+                dispose = { disposeOwnedResources(ownedLoaders.values, ownedArtifacts, onDisposed) },
+                reportDisposalFailure = onDisposalFailure
+            )
             return EvaluatedComponentGeneration(ownedArtifacts, scripts, ownedLoaders, state, executionContext)
         } catch (error: Throwable) {
-            retainedLoaders.values.toSet().forEach { loader -> runCatching(loader::close) }
-            executionArtifacts?.let { artifacts -> runCatching(artifacts::close) }
-            runCatching(onDisposed)
+            val failures = CleanupFailureCollector()
+            closeLoaders(retainedLoaders.values, failures)
+            executionArtifacts?.let { artifacts -> failures.attempt(artifacts::close) }
+            failures.attempt(onDisposed)
+            failures.suppressInto(error)
             throw error
         }
     }
@@ -119,26 +119,30 @@ internal object ComponentGenerationEvaluator {
         affectedPaths: Collection<String>,
         baseClassLoader: ClassLoader,
         previous: EvaluatedComponentGeneration? = null,
-        onDisposed: () -> Unit = {}
+        onDisposed: () -> Unit = {},
+        onDisposalFailure: (Throwable) -> Unit = {}
     ): ComponentEvaluationResult {
         val affected = affectedPaths.toSet()
-        val executionArtifacts = compiled.retained()
+        var executionArtifacts: CompiledComponentGeneration? = null
         val loaders = linkedMapOf<String, ManagedComponentClassLoader>()
         val evaluated = linkedMapOf<String, BatchEvaluatedScript>()
-        val state = previous?.state?.copy() ?: ReplStateBridge.StateTable()
-        val oldStateKeys = previous?.scripts.orEmpty()
-            .filterKeys(affected::contains)
-            .values
-            .map { script -> script.compiled.stateKey }
-        val newStateKeys = compiled.scripts.filter { script -> script.source.name in affected }
-            .map(BatchCompiledScript::stateKey)
-        (oldStateKeys + newStateKeys).forEach { stateKey ->
-            state.instances.remove(stateKey)
-            state.ready.remove(stateKey)
-        }
+        var state: ReplStateBridge.StateTable? = null
         var topLevelStarted = false
 
         try {
+            executionArtifacts = compiled.retained()
+            val workingState = previous?.state?.copy() ?: ReplStateBridge.StateTable()
+            state = workingState
+            val oldStateKeys = previous?.scripts.orEmpty()
+                .filterKeys(affected::contains)
+                .values
+                .map { script -> script.compiled.stateKey }
+            val newStateKeys = compiled.scripts.filter { script -> script.source.name in affected }
+                .map(BatchCompiledScript::stateKey)
+            (oldStateKeys + newStateKeys).forEach { stateKey ->
+                workingState.instances.remove(stateKey)
+                workingState.ready.remove(stateKey)
+            }
             compiled.graph.componentOrder().forEach { component ->
                 val oldLoader = previous?.loaders?.get(component.id)
                 val componentAffected = component.paths.any(affected::contains) || oldLoader == null
@@ -159,7 +163,7 @@ internal object ComponentGenerationEvaluator {
                 }
             }
 
-            ReplStateBridge.stage(state) {
+            ReplStateBridge.stage(workingState) {
                 val scriptByPath = compiled.scripts.associateBy { script -> script.source.name }
                 compiled.graph.initializationOrder.filter(affected::contains).forEach { path ->
                     val compiledScript = scriptByPath.getValue(path)
@@ -172,16 +176,20 @@ internal object ComponentGenerationEvaluator {
                 }
             }
         } catch (error: Throwable) {
-            runCatching {
-                ReplStateBridge.stage(state) {
-                    disposeEvaluatedScripts(compiled, affected, evaluated, error)
+            state?.let { workingState ->
+                runCatching {
+                    ReplStateBridge.stage(workingState) {
+                        disposeEvaluatedScripts(compiled, affected, evaluated, error)
+                    }
+                }.exceptionOrNull()?.let { cleanupFailure ->
+                    if (cleanupFailure !== error) error.addSuppressed(cleanupFailure)
                 }
-            }.exceptionOrNull()?.let { cleanupFailure ->
-                if (cleanupFailure !== error) error.addSuppressed(cleanupFailure)
             }
-            loaders.values.toSet().forEach { loader -> runCatching(loader::close) }
-            runCatching(executionArtifacts::close)
-            runCatching(onDisposed)
+            val failures = CleanupFailureCollector()
+            closeLoaders(loaders.values, failures)
+            executionArtifacts?.let { artifacts -> failures.attempt(artifacts::close) }
+            failures.attempt(onDisposed)
+            failures.suppressInto(error)
             val source = compiled.graph.initializationOrder.firstOrNull { path ->
                 path in affected && path !in evaluated
             } ?: "<component-evaluation>"
@@ -191,22 +199,46 @@ internal object ComponentGenerationEvaluator {
             )
         }
 
+        val ownedArtifacts = requireNotNull(executionArtifacts)
+        val ownedState = requireNotNull(state)
         val ownedLoaders = loaders.toMap()
-        val executionContext = ScriptExecutionContext(state) {
-            try {
-                ownedLoaders.values.toSet().forEach(ManagedComponentClassLoader::close)
-            } finally {
-                try {
-                    executionArtifacts.close()
-                } finally {
-                    onDisposed()
-                }
-            }
-        }
+        val executionContext = ScriptExecutionContext(
+            state = ownedState,
+            dispose = { disposeOwnedResources(ownedLoaders.values, ownedArtifacts, onDisposed) },
+            reportDisposalFailure = onDisposalFailure
+        )
         return ComponentEvaluationResult.Success(
-            EvaluatedComponentGeneration(executionArtifacts, evaluated.toMap(), ownedLoaders, state, executionContext),
+            EvaluatedComponentGeneration(
+                ownedArtifacts,
+                evaluated.toMap(),
+                ownedLoaders,
+                ownedState,
+                executionContext
+            ),
             compiled.graph.initializationOrder.filter(affected::contains)
         )
+    }
+
+    private fun disposeOwnedResources(
+        loaders: Collection<ManagedComponentClassLoader>,
+        artifacts: CompiledComponentGeneration,
+        onDisposed: () -> Unit
+    ) {
+        val failures = CleanupFailureCollector()
+        closeLoaders(loaders, failures)
+        failures.attempt(artifacts::close)
+        failures.attempt(onDisposed)
+        failures.throwIfAny()
+    }
+
+    private fun closeLoaders(
+        loaders: Collection<ManagedComponentClassLoader>,
+        failures: CleanupFailureCollector
+    ) {
+        val seen = Collections.newSetFromMap(IdentityHashMap<ManagedComponentClassLoader, Boolean>())
+        loaders.forEach { loader ->
+            if (seen.add(loader)) failures.attempt(loader::close)
+        }
     }
 
     private fun evaluateScript(
@@ -218,7 +250,9 @@ internal object ComponentGenerationEvaluator {
         val instance = type.getField("INSTANCE").get(null)
         val eval = type.methods.singleOrNull { method -> method.name == "\$\$eval" }
             ?: error("Generated script has no \$\$eval method: ${script.className}")
-        val scriptDsl = ComponentRuntimeScript()
+        val scriptDsl = ComponentRuntimeScript().also { instance ->
+            instance.attachRuntimeSource(script.source.name)
+        }
         ReplStateBridge.beginEvaluation(script.stateKey)
         try {
             try {

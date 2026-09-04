@@ -6,10 +6,18 @@ import eternalscript.scripting.compilation.ScriptCompilationEnvironmentFactory
 import eternalscript.scripting.compilation.ScriptCompilationOutcome
 import eternalscript.scripting.compilation.ScriptCandidateSelection
 import eternalscript.scripting.compilation.ScriptEnvironmentSnapshot
-import eternalscript.scripting.source.isEternalScriptFile
+import eternalscript.scripting.repl.k2.CompiledComponent
+import eternalscript.scripting.repl.k2.CompiledComponentArtifact
+import eternalscript.scripting.repl.k2.CompiledComponentGeneration
+import eternalscript.scripting.repl.k2.ScriptComponent
+import eternalscript.scripting.repl.k2.ScriptDependencyGraph
 import java.io.File
 import java.net.URLClassLoader
+import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.jar.JarEntry
@@ -20,25 +28,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
 
 class ScriptDefinitionAndCoordinatorTest {
-    @Test
-    fun `accepts only EternalScript files`() {
-        val directory = createTempDirectory("eternalscript-extension-test").toFile()
-        try {
-            val eternal = File(directory, "hello.eternal.kts").apply { createNewFile() }
-            val kts = File(directory, "hello.kts").apply { createNewFile() }
-            val kotlin = File(directory, "hello.kt").apply { createNewFile() }
-            assertTrue(isEternalScriptFile(eternal))
-            assertFalse(isEternalScriptFile(kts))
-            assertFalse(isEternalScriptFile(kotlin))
-        } finally {
-            directory.deleteRecursively()
-        }
-    }
-
     @Test
     fun `exposes only the supported lifecycle event and command DSL names`() {
         val methods = Script::class.java.declaredMethods.map { method -> method.name }.toSet()
@@ -137,6 +131,222 @@ class ScriptDefinitionAndCoordinatorTest {
     }
 
     @Test
+    fun `cache executor rejection releases the retained generation`() {
+        val directory = createTempDirectory("eternalscript-cache-rejection-test").toFile()
+        val compilerExecutor = Executors.newSingleThreadExecutor()
+        val cacheExecutor = Executors.newSingleThreadExecutor().apply { shutdown() }
+        val coordinator = ScriptCompilationCoordinator(
+            cacheRoot = directory,
+            mainDispatcher = { block -> block() },
+            compilerExecutor = compilerExecutor,
+            cacheExecutor = cacheExecutor
+        )
+        val artifact = CompiledComponentArtifact.create(
+            directory.toPath().resolve("live-components"),
+            "cache-rejection",
+            emptyMap()
+        )
+        val generation = generationOf("cache-rejection", artifact)
+        val environment = ScriptCompilationEnvironmentFactory.build(environmentSnapshot())
+        val reported = CompletableFuture<Throwable>()
+        try {
+            coordinator.publishCache(generation, environment, reported::complete)
+            assertIs<RejectedExecutionException>(reported.get(10, TimeUnit.SECONDS))
+
+            generation.close()
+
+            assertFalse(artifact.jar.toFile().exists())
+        } finally {
+            generation.close()
+            environment.close()
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `disabled cache skips artifact publication`() {
+        val directory = createTempDirectory("eternalscript-cache-disabled-test").toFile()
+        val coordinator = ScriptCompilationCoordinator(
+            cacheRoot = directory,
+            cacheEnabled = { false },
+            mainDispatcher = { block -> block() }
+        )
+        val artifact = CompiledComponentArtifact.create(
+            directory.toPath().resolve("live-components"),
+            "cache-disabled",
+            emptyMap()
+        )
+        val generation = generationOf("cache-disabled", artifact)
+        val environment = ScriptCompilationEnvironmentFactory.build(environmentSnapshot())
+        val reported = AtomicBoolean()
+        try {
+            coordinator.publishCache(generation, environment) { reported.set(true) }
+
+            assertFalse(reported.get())
+            assertFalse(directory.resolve("objects").exists())
+            assertFalse(directory.resolve("index.json").exists())
+        } finally {
+            generation.close()
+            environment.close()
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `close interrupts a permanently blocked executor after the graceful timeout`() {
+        val directory = createTempDirectory("eternalscript-close-barrier-test").toFile()
+        val compilerExecutor = Executors.newSingleThreadExecutor()
+        val cacheExecutor = Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1)
+        val interrupted = AtomicBoolean()
+        compilerExecutor.execute {
+            entered.countDown()
+            try {
+                CountDownLatch(1).await()
+            } catch (_: InterruptedException) {
+                interrupted.set(true)
+            }
+        }
+        assertTrue(entered.await(10, TimeUnit.SECONDS))
+        val artifactRoot = directory.resolve("live-components").apply { mkdirs() }
+        val coordinator = ScriptCompilationCoordinator(
+            cacheRoot = directory,
+            mainDispatcher = { block -> block() },
+            compilerExecutor = compilerExecutor,
+            cacheExecutor = cacheExecutor,
+            closeTimeoutMillis = 100
+        )
+        try {
+            coordinator.close()
+
+            assertTrue(interrupted.get())
+            assertTrue(compilerExecutor.isTerminated)
+            assertTrue(cacheExecutor.isTerminated)
+            assertFalse(artifactRoot.exists())
+        } finally {
+            compilerExecutor.shutdownNow()
+            cacheExecutor.shutdownNow()
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `close eventually cleans up after an executor terminates beyond the forced timeout`() {
+        val directory = createTempDirectory("eternalscript-close-nonterminating-test").toFile()
+        val compilerExecutor = Executors.newSingleThreadExecutor()
+        val cacheExecutor = Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1)
+        val release = AtomicBoolean()
+        compilerExecutor.execute {
+            entered.countDown()
+            while (!release.get()) {
+                try {
+                    Thread.sleep(1_000)
+                } catch (_: InterruptedException) {}
+            }
+        }
+        assertTrue(entered.await(10, TimeUnit.SECONDS))
+        val artifactRoot = directory.resolve("live-components").apply { mkdirs() }
+        val coordinator = ScriptCompilationCoordinator(
+            cacheRoot = directory,
+            mainDispatcher = { block -> block() },
+            compilerExecutor = compilerExecutor,
+            cacheExecutor = cacheExecutor,
+            closeTimeoutMillis = 25
+        )
+        try {
+            coordinator.close()
+
+            assertFalse(compilerExecutor.isTerminated)
+            assertTrue(cacheExecutor.isTerminated)
+            assertTrue(artifactRoot.exists())
+
+            release.set(true)
+            assertTrue(compilerExecutor.awaitTermination(10, TimeUnit.SECONDS))
+            assertTrue(waitUntil(10, TimeUnit.SECONDS) { !artifactRoot.exists() })
+        } finally {
+            release.set(true)
+            compilerExecutor.shutdownNow()
+            cacheExecutor.shutdownNow()
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `forced shutdown releases a retained cache task removed from the queue`() {
+        val directory = createTempDirectory("eternalscript-cache-forced-shutdown-test").toFile()
+        val compilerExecutor = Executors.newSingleThreadExecutor()
+        val cacheExecutor = Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1)
+        cacheExecutor.execute {
+            entered.countDown()
+            try {
+                CountDownLatch(1).await()
+            } catch (_: InterruptedException) {}
+        }
+        assertTrue(entered.await(10, TimeUnit.SECONDS))
+        val coordinator = ScriptCompilationCoordinator(
+            cacheRoot = directory,
+            mainDispatcher = { block -> block() },
+            compilerExecutor = compilerExecutor,
+            cacheExecutor = cacheExecutor,
+            closeTimeoutMillis = 100
+        )
+        val artifact = CompiledComponentArtifact.create(
+            directory.toPath().resolve("live-components"),
+            "queued-cache",
+            emptyMap()
+        )
+        val generation = generationOf("queued-cache", artifact)
+        val environment = ScriptCompilationEnvironmentFactory.build(environmentSnapshot())
+        try {
+            coordinator.publishCache(generation, environment) {}
+            coordinator.close()
+
+            generation.close()
+
+            assertTrue(cacheExecutor.isTerminated)
+            assertFalse(Files.exists(artifact.jar))
+        } finally {
+            generation.close()
+            environment.close()
+            compilerExecutor.shutdownNow()
+            cacheExecutor.shutdownNow()
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `close preserves an artifact retained by an in flight runtime context`() {
+        val directory = createTempDirectory("eternalscript-close-retained-artifact-test").toFile()
+        val artifactRoot = directory.resolve("live-components").toPath()
+        val artifact = CompiledComponentArtifact.create(artifactRoot, "in-flight", emptyMap())
+        val runtimeGeneration = generationOf("in-flight", artifact)
+        val inFlightExecution = runtimeGeneration.retained()
+        val coordinator = ScriptCompilationCoordinator(directory) { block -> block() }
+        try {
+            runtimeGeneration.close()
+            coordinator.close()
+
+            assertTrue(Files.exists(artifact.jar))
+            assertTrue(Files.exists(artifactRoot))
+
+            inFlightExecution.close()
+            assertFalse(Files.exists(artifact.jar))
+        } finally {
+            runtimeGeneration.close()
+            inFlightExecution.close()
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `compiler environment uses only curated defaults while retaining runtime roots on classpath`() {
         val stdlib = File(KotlinVersion::class.java.protectionDomain.codeSource.location.toURI())
         val pluginArtifact = File(Script::class.java.protectionDomain.codeSource.location.toURI())
@@ -152,8 +362,27 @@ class ScriptDefinitionAndCoordinatorTest {
         )
 
         assertTrue(environment.classpath.any { file -> file.absoluteFile.normalize() == stdlib.absoluteFile.normalize() })
-        assertEquals(SCRIPT_DEFAULT_IMPORTS, environment.defaultImports)
+        assertTrue(environment.defaultImports.isEmpty())
         environment.close()
+    }
+
+    @Test
+    fun `environment replacement is not interrupted by previous environment cleanup failure`() {
+        val directory = createTempDirectory("eternalscript-environment-replacement-test").toFile()
+        val coordinator = ScriptCompilationCoordinator(directory) { block -> block() }
+        try {
+            val first = coordinator.environmentBlocking(environmentSnapshot()).getOrThrow()
+            first.close()
+
+            val replacement = coordinator.environmentBlocking(
+                environmentSnapshot().copy(pluginVersion = "2.0.0")
+            )
+
+            assertTrue(replacement.isSuccess)
+        } finally {
+            coordinator.close()
+            directory.deleteRecursively()
+        }
     }
 
     @Test
@@ -334,6 +563,41 @@ class ScriptDefinitionAndCoordinatorTest {
     }
 
     @Test
+    fun `unchanged exact request skips analysis and compilation`() {
+        val directory = createTempDirectory("eternalscript-coordinator-unchanged").toFile()
+        val coordinator = ScriptCompilationCoordinator(directory) { block -> block() }
+        val generations = mutableListOf<eternalscript.scripting.repl.k2.CompiledComponentGeneration>()
+        try {
+            val sources = listOf(SharedReplSource("value.eternal.kts", "val value: Int = 1"))
+            val snapshot = compilationEnvironmentSnapshot()
+            val first = assertIs<ScriptCompilationOutcome.Success>(
+                coordinator.compileBlocking(
+                    coordinator.request(0, emptyList(), sources, environmentSnapshot = snapshot)
+                )
+            )
+            generations += first.generation
+            coordinator.commit(first, 1)
+
+            val unchanged = assertIs<ScriptCompilationOutcome.Success>(
+                coordinator.compileBlocking(
+                    coordinator.request(1, sources, sources, environmentSnapshot = snapshot)
+                )
+            )
+            generations += unchanged.generation
+
+            assertTrue(unchanged.affectedPaths.isEmpty())
+            assertEquals(0, unchanged.metrics.analyzedCount)
+            assertEquals(0, unchanged.metrics.compiledCount)
+            assertEquals(1, unchanged.metrics.reusedCount)
+            assertEquals(0, unchanged.metrics.compileMillis)
+        } finally {
+            generations.asReversed().forEach { generation -> generation.close() }
+            coordinator.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `same fingerprint with a replacement plugin loader rebuilds compiler state`() {
         val directory = createTempDirectory("eternalscript-loader-identity").toFile()
         val coordinator = ScriptCompilationCoordinator(directory) { block -> block() }
@@ -450,6 +714,33 @@ class ScriptDefinitionAndCoordinatorTest {
         }
     }
 
+    @Test
+    fun `coordinator reuses an unchanged environment and rebuilds after a library change`() {
+        val directory = createTempDirectory("eternalscript-environment-reuse")
+        val library = directory.resolve("library.jar")
+        writeProbeJar(library.toFile(), 1)
+        val snapshot = ScriptEnvironmentSnapshot(
+            Script::class.java.classLoader,
+            emptyList(),
+            listOf(library.toFile()),
+            "1.0.0",
+            null
+        )
+        val coordinator = ScriptCompilationCoordinator(directory.toFile()) { block -> block() }
+        try {
+            val first = coordinator.environmentBlocking(snapshot).getOrThrow()
+            val unchanged = coordinator.environmentBlocking(snapshot).getOrThrow()
+            assertSame(first, unchanged)
+
+            writeProbeJar(library.toFile(), 2)
+            val changed = coordinator.environmentBlocking(snapshot).getOrThrow()
+            assertNotEquals(first.fingerprint, changed.fingerprint)
+        } finally {
+            coordinator.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
     private fun environmentSnapshot(): ScriptEnvironmentSnapshot = ScriptEnvironmentSnapshot(
         Script::class.java.classLoader,
         emptyList(),
@@ -471,6 +762,35 @@ class ScriptDefinitionAndCoordinatorTest {
             File(Script::class.java.protectionDomain.codeSource.location.toURI()),
             classpath
         )
+    }
+
+    private fun generationOf(
+        componentId: String,
+        artifact: CompiledComponentArtifact
+    ): CompiledComponentGeneration {
+        val component = ScriptComponent(componentId, emptyList(), emptySet())
+        return CompiledComponentGeneration(
+            graph = ScriptDependencyGraph(
+                paths = emptyList(),
+                dependencies = emptyMap(),
+                initializationDependencies = emptyMap(),
+                components = listOf(component),
+                initializationOrder = emptyList()
+            ),
+            sources = emptyList(),
+            components = mapOf(
+                componentId to CompiledComponent(component, emptyList(), emptyList(), artifact)
+            )
+        )
+    }
+
+    private fun waitUntil(timeout: Long, unit: TimeUnit, condition: () -> Boolean): Boolean {
+        val deadline = System.nanoTime() + unit.toNanos(timeout)
+        while (System.nanoTime() < deadline) {
+            if (condition()) return true
+            Thread.sleep(10)
+        }
+        return condition()
     }
 
     private fun writeProbeJar(target: File, marker: Int) {

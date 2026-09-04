@@ -2,6 +2,10 @@ package eternalscript.scripting.repl.k2
 
 import eternalscript.scripting.repl.SharedReplDiagnostic
 import eternalscript.scripting.repl.SharedReplSource
+import eternalscript.scripting.runtime.CleanupFailureCollector
+import java.util.Collections
+import java.util.IdentityHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class ComponentCompilationMetrics(
     val analyzed: Int,
@@ -42,6 +46,8 @@ internal data class CompiledComponentGeneration(
     val sources: List<SharedReplSource>,
     val components: Map<String, CompiledComponent>
 ) : AutoCloseable {
+    private val closed = AtomicBoolean()
+
     val scripts: List<BatchCompiledScript> = graph.initializationOrder.map { path ->
         components.values.asSequence()
             .flatMap { component -> component.scripts.asSequence() }
@@ -51,7 +57,7 @@ internal data class CompiledComponentGeneration(
     fun retained(): CompiledComponentGeneration = CompiledComponentGeneration(
         graph,
         sources,
-        components.mapValues { (_, component) -> component.retained() }
+        retainComponents(components.keys)
     )
 
     fun retainedSubset(paths: Collection<String>): CompiledComponentGeneration {
@@ -60,13 +66,39 @@ internal data class CompiledComponentGeneration(
         return CompiledComponentGeneration(
             subsetGraph,
             sources.filter { source -> source.name in selected },
-            subsetGraph.components.associate { component ->
-                component.id to components.getValue(component.id).retained()
-            }
+            retainComponents(subsetGraph.components.map(ScriptComponent::id))
         )
     }
 
     override fun close() {
-        components.values.toSet().forEach(CompiledComponent::close)
+        if (!closed.compareAndSet(false, true)) return
+        val failures = CleanupFailureCollector()
+        closeComponents(components.values, failures)
+        failures.throwIfAny()
+    }
+
+    private fun retainComponents(componentIds: Iterable<String>): Map<String, CompiledComponent> {
+        val retained = linkedMapOf<String, CompiledComponent>()
+        try {
+            componentIds.forEach { componentId ->
+                retained[componentId] = components.getValue(componentId).retained()
+            }
+            return retained
+        } catch (error: Throwable) {
+            val failures = CleanupFailureCollector()
+            closeComponents(retained.values, failures)
+            failures.suppressInto(error)
+            throw error
+        }
+    }
+
+    private fun closeComponents(
+        values: Collection<CompiledComponent>,
+        failures: CleanupFailureCollector
+    ) {
+        val seen = Collections.newSetFromMap(IdentityHashMap<CompiledComponent, Boolean>())
+        values.forEach { component ->
+            if (seen.add(component)) failures.attempt(component::close)
+        }
     }
 }

@@ -14,8 +14,8 @@ import kotlin.test.assertTrue
 class MainCommandSuggestionTest {
     @Test
     fun `matches an unquoted partial path before escaping the suggestion`() {
-        val input = "/es load h"
-        val builder = SuggestionsBuilder(input, "/es load ".length)
+        val input = "/es enable h"
+        val builder = SuggestionsBuilder(input, "/es enable ".length)
 
         suggestPaths(
             listOf("hello.eternal.kts", "world.eternal.kts"),
@@ -24,13 +24,13 @@ class MainCommandSuggestionTest {
 
         val suggestions = builder.build().list
         assertEquals(listOf("hello.eternal.kts"), suggestions.map { suggestion -> suggestion.text })
-        assertEquals("/es load hello.eternal.kts", suggestions.single().apply(input))
+        assertEquals("/es enable hello.eternal.kts", suggestions.single().apply(input))
     }
 
     @Test
     fun `matches a quoted partial path and returns valid quoted syntax`() {
-        val input = "/es load \"combat/"
-        val builder = SuggestionsBuilder(input, "/es load ".length)
+        val input = "/es enable \"combat/"
+        val builder = SuggestionsBuilder(input, "/es enable ".length)
 
         suggestPaths(
             listOf("combat/a.eternal.kts", "other.eternal.kts"),
@@ -39,13 +39,13 @@ class MainCommandSuggestionTest {
 
         val suggestions = builder.build().list
         assertEquals(listOf("\"combat/a.eternal.kts\""), suggestions.map { suggestion -> suggestion.text })
-        assertEquals("/es load \"combat/a.eternal.kts\"", suggestions.single().apply(input))
+        assertEquals("/es enable \"combat/a.eternal.kts\"", suggestions.single().apply(input))
     }
 
     @Test
     fun `matches paths case insensitively`() {
-        val input = "/es unload HEL"
-        val builder = SuggestionsBuilder(input, "/es unload ".length)
+        val input = "/es disable HEL"
+        val builder = SuggestionsBuilder(input, "/es disable ".length)
 
         suggestPaths(listOf("hello.eternal.kts"), builder)
 

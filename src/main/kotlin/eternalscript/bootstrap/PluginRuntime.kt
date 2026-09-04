@@ -5,19 +5,23 @@ import eternalscript.api.ScriptOperationStatus
 import eternalscript.command.MainCommand
 import eternalscript.config.ConfigService
 import eternalscript.config.PluginPaths
-import eternalscript.feedback.FeedbackKey
-import eternalscript.feedback.FeedbackLevel
-import eternalscript.feedback.FeedbackService
-import eternalscript.feedback.FeedbackLine
-import eternalscript.feedback.FeedbackLineKind
-import eternalscript.feedback.FeedbackView
-import eternalscript.feedback.ScriptFeedbackBridge
-import eternalscript.feedback.feedbackText
-import eternalscript.feedback.systemFeedback
+import eternalscript.messaging.MessageKey
+import eternalscript.messaging.MessageLevel
+import eternalscript.messaging.MessageLine
+import eternalscript.messaging.MessageLineKind
+import eternalscript.messaging.MessageView
+import eternalscript.messaging.messageText
+import eternalscript.messaging.systemMessage
 import eternalscript.metrics.MetricsService
+import eternalscript.logging.ScriptLoggingRuntime
+import eternalscript.logging.UnifiedLoggingService
+import eternalscript.messaging.ScriptNotificationBridge
+import eternalscript.messaging.UnifiedMessagingService
 import eternalscript.ide.EternalScriptIdeEnvironmentPublisher
 import eternalscript.scripting.runtime.ScriptEngine
 import eternalscript.scripting.source.ScriptSourceRepository
+import eternalscript.storage.SQLiteStorageService
+import eternalscript.storage.ScriptStorageRuntime
 import org.bukkit.command.CommandSender
 import org.bukkit.plugin.ServicePriority
 import org.bukkit.plugin.java.JavaPlugin
@@ -27,45 +31,61 @@ internal class PluginRuntime(
 ) : AutoCloseable {
     private val paths = PluginPaths(plugin)
     private val config = ConfigService(paths.configFile)
-    private val feedback = FeedbackService(plugin, paths, config)
+    private val logging = UnifiedLoggingService(
+        plugin,
+        level = { config.current.loggingLevel },
+        slowStorageMillis = { config.current.slowStorageMillis }
+    )
+    private val messaging = UnifiedMessagingService(plugin, paths, config, logging)
     private val sources = ScriptSourceRepository(plugin, paths)
     private val ideEnvironment = EternalScriptIdeEnvironmentPublisher(
         paths.dataDirectory,
-        plugin.pluginMeta.version,
-        feedback::system
+        messaging::system
     )
-    private val engine = ScriptEngine(plugin, paths, sources, feedback::system, ideEnvironment)
+    private val storage = SQLiteStorageService(paths.storageDatabaseFile.toPath())
+    private val engine = ScriptEngine(
+        plugin,
+        paths,
+        sources,
+        messaging::system,
+        ideEnvironment,
+        cacheEnabled = { config.current.cacheEnabled }
+    )
     private val api = EternalScriptApiService(engine)
     private val metrics = MetricsService(plugin) { config.current.metricsEnabled }
-    private val command = MainCommand(plugin, api, sources, feedback, ::reloadConfiguration)
+    private val command = MainCommand(plugin, api, sources, messaging, ::reloadConfiguration)
     private var serviceRegistered = false
-    private var scriptFeedbackRegistration: AutoCloseable? = null
+    private var scriptNotificationRegistration: AutoCloseable? = null
+    private var scriptLoggingRegistration: AutoCloseable? = null
+    private var scriptStorageRegistration: AutoCloseable? = null
     private var closed = false
 
     fun enable() {
         try {
             paths.ensureBaseDirectories()
+            scriptLoggingRegistration = ScriptLoggingRuntime.install(logging)
+            storage.open()
+            scriptStorageRegistration = ScriptStorageRuntime.install(plugin, storage, logging)
             sources.installBundledResources()
-            feedback.reload()
-            prepareIdeEnvironment()
-            scriptFeedbackRegistration = ScriptFeedbackBridge.install(feedback::sendScript)
+            messaging.reload()
+            scriptNotificationRegistration = ScriptNotificationBridge.install(messaging::sendNotification)
             registerApi()
             command.register()
 
             val startup = engine.startup()
             if (startup.status == ScriptOperationStatus.SUCCESS) {
-                feedback.system(
-                    systemFeedback(
-                        FeedbackLevel.SUCCESS,
-                        FeedbackKey.SYSTEM_STARTUP_SUCCESS,
+                messaging.system(
+                    systemMessage(
+                        MessageLevel.SUCCESS,
+                        MessageKey.SYSTEM_STARTUP_SUCCESS,
                         "count" to startup.affectedPaths.size
                     )
                 )
             } else {
-                feedback.system(
-                    systemFeedback(
-                        FeedbackLevel.WARNING,
-                        FeedbackKey.SYSTEM_STARTUP_DEGRADED
+                messaging.system(
+                    systemMessage(
+                        MessageLevel.WARNING,
+                        MessageKey.SYSTEM_STARTUP_DEGRADED
                     )
                 )
             }
@@ -77,37 +97,37 @@ internal class PluginRuntime(
     }
 
     fun reloadConfiguration(sender: CommandSender) {
-        val issues = feedback.reload()
+        val issues = messaging.reload()
         metrics.refresh()
         val title = if (issues.isEmpty()) {
-            feedbackText(FeedbackKey.COMMAND_CONFIG_SUCCESS)
+            messageText(MessageKey.COMMAND_CONFIG_SUCCESS)
         } else {
-            feedbackText(FeedbackKey.COMMAND_CONFIG_WITH_ISSUES, "count" to issues.size)
+            messageText(MessageKey.COMMAND_CONFIG_WITH_ISSUES, "count" to issues.size)
         }
-        feedback.send(
+        messaging.send(
             sender,
-            FeedbackView(
-                if (issues.isEmpty()) FeedbackLevel.SUCCESS else FeedbackLevel.WARNING,
+            MessageView(
+                if (issues.isEmpty()) MessageLevel.SUCCESS else MessageLevel.WARNING,
                 title,
                 buildList {
                     issues.take(MAX_CONFIG_ISSUES_IN_COMMAND).forEach { issue ->
                         add(
-                            FeedbackLine(
-                                feedbackText(
-                                    FeedbackKey.COMMAND_CONFIG_ISSUE,
+                            MessageLine(
+                                messageText(
+                                    MessageKey.COMMAND_CONFIG_ISSUE,
                                     "file" to issue.file,
                                     "reason" to issue.reason
                                 ),
-                                FeedbackLineKind.ERROR
+                                MessageLineKind.ERROR
                             )
                         )
                     }
                     val remaining = issues.size - MAX_CONFIG_ISSUES_IN_COMMAND
                     if (remaining > 0) {
                         add(
-                            FeedbackLine(
-                                feedbackText(FeedbackKey.COMMAND_CONFIG_MORE_ISSUES, "count" to remaining),
-                                FeedbackLineKind.HINT
+                            MessageLine(
+                                messageText(MessageKey.COMMAND_CONFIG_MORE_ISSUES, "count" to remaining),
+                                MessageLineKind.HINT
                             )
                         )
                     }
@@ -120,20 +140,31 @@ internal class PluginRuntime(
         if (closed) return
         closed = true
         unregisterApi()
-        try {
-            engine.shutdown()
-        } finally {
-            try {
-                metrics.close()
-            } finally {
-                scriptFeedbackRegistration?.close()
-                scriptFeedbackRegistration = null
-            }
+        val failures = mutableListOf<Throwable>()
+        fun attempt(block: () -> Unit) {
+            runCatching(block).exceptionOrNull()?.let(failures::add)
         }
-        if (feedback.isReady()) {
-            feedback.system(
-                systemFeedback(FeedbackLevel.SUCCESS, FeedbackKey.SYSTEM_SHUTDOWN_SUCCESS)
-            )
+        attempt(engine::shutdown)
+        attempt {
+            scriptStorageRegistration?.close()
+            scriptStorageRegistration = null
+        }
+        attempt(storage::close)
+        attempt(metrics::close)
+        attempt {
+            scriptNotificationRegistration?.close()
+            scriptNotificationRegistration = null
+        }
+        if (messaging.isReady()) attempt {
+            messaging.system(systemMessage(MessageLevel.SUCCESS, MessageKey.SYSTEM_SHUTDOWN_SUCCESS))
+        }
+        attempt {
+            scriptLoggingRegistration?.close()
+            scriptLoggingRegistration = null
+        }
+        failures.firstOrNull()?.let { failure ->
+            failures.drop(1).forEach(failure::addSuppressed)
+            throw failure
         }
     }
 
@@ -151,40 +182,6 @@ internal class PluginRuntime(
         if (!serviceRegistered) return
         plugin.server.servicesManager.unregister(EternalScriptApi::class.java, api)
         serviceRegistered = false
-    }
-
-    private fun prepareIdeEnvironment() {
-        val report = runCatching(ideEnvironment::prepare).getOrElse { error ->
-            feedback.system(
-                systemFeedback(
-                    FeedbackLevel.WARNING,
-                    FeedbackKey.SYSTEM_IDE_LEGACY_CLEANUP_FAILED,
-                    "path" to ".eternalscript/ide",
-                    "error" to (error.message ?: error.javaClass.name),
-                    cause = error
-                )
-            )
-            return
-        }
-        report.preservedPaths.forEach { path ->
-            feedback.system(
-                systemFeedback(
-                    FeedbackLevel.WARNING,
-                    FeedbackKey.SYSTEM_IDE_LEGACY_PRESERVED,
-                    "path" to path
-                )
-            )
-        }
-        report.failures.forEach { (path, reason) ->
-            feedback.system(
-                systemFeedback(
-                    FeedbackLevel.WARNING,
-                    FeedbackKey.SYSTEM_IDE_LEGACY_CLEANUP_FAILED,
-                    "path" to path,
-                    "error" to reason
-                )
-            )
-        }
     }
 
     private companion object {

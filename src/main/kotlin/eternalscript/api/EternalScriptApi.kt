@@ -12,6 +12,13 @@ public interface EternalScriptApi {
      */
     public fun reload(): CompletionStage<ScriptOperationResult>
 
+    public fun reload(path: String): CompletionStage<ScriptOperationResult>
+
+    /** Compiles enabled disk sources without changing the active generation. */
+    public fun check(): CompletionStage<ScriptOperationResult>
+
+    public fun check(path: String): CompletionStage<ScriptOperationResult>
+
     /**
      * Recompiles the source texts captured by the current in-memory generation without rereading disk.
      */
@@ -22,21 +29,22 @@ public interface EternalScriptApi {
      * An already active target is replaced even when its source text has not changed.
      * A single leading `-` on the final path segment is treated as the persistent disabled marker.
      */
-    public fun load(path: String): CompletionStage<ScriptOperationResult>
+    public fun enable(path: String): CompletionStage<ScriptOperationResult>
 
     /**
      * Unloads an EternalScript file or directory target and persists that state with a leading `-`.
      * The operation fails without changing state when an active consumer outside the target depends on it.
      */
-    public fun unload(path: String): CompletionStage<ScriptOperationResult>
+    public fun disable(path: String): CompletionStage<ScriptOperationResult>
 
     /**
-     * Cancels any current script operation and unloads every active script without renaming source files.
+     * Cancels the current preparing or compiling operation without changing the active generation.
+     * Returns `BUSY` once generation application or lifecycle cleanup has started.
      */
-    public fun clear(): CompletionStage<ScriptOperationResult>
+    public fun cancel(): CompletionStage<ScriptOperationResult>
 
     public companion object {
-        public const val API_VERSION: Int = 1
+        public const val API_VERSION: Int = 2
 
         @JvmStatic
         public fun get(): EternalScriptApi = getOrNull()

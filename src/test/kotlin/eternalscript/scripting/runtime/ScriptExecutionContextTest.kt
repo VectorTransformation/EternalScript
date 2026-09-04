@@ -4,6 +4,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -83,6 +85,54 @@ class ScriptExecutionContextTest {
             ReplStateBridge.publish(activeBefore)
         }
         assertTrue(newDisposed.get())
+    }
+
+    @Test
+    fun `disposal failure is reported once without escaping an in flight callback`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val disposeAttempts = AtomicInteger()
+        val reportAttempts = AtomicInteger()
+        val reported = AtomicReference<Throwable>()
+        val context = ScriptExecutionContext(
+            state = table("value", "active"),
+            dispose = {
+                disposeAttempts.incrementAndGet()
+                throw IllegalStateException("dispose failed")
+            },
+            reportDisposalFailure = { error ->
+                reportAttempts.incrementAndGet()
+                reported.set(error)
+                throw IllegalStateException("report failed")
+            }
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val running = executor.submit<String> {
+                requireNotNull(
+                    context.executeOrNull {
+                        entered.countDown()
+                        check(release.await(10, TimeUnit.SECONDS))
+                        "finished"
+                    }
+                )
+            }
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+
+            context.retire()
+            context.retire()
+            release.countDown()
+
+            assertEquals("finished", running.get(10, TimeUnit.SECONDS))
+            assertEquals(1, disposeAttempts.get())
+            assertEquals(1, reportAttempts.get())
+            assertEquals("dispose failed", reported.get()?.message)
+            assertEquals(null, context.executeOrNull { "late" })
+        } finally {
+            release.countDown()
+            context.retire()
+            executor.shutdownNow()
+        }
     }
 
     private fun table(key: String, value: Any): ReplStateBridge.StateTable =

@@ -1,9 +1,9 @@
 package eternalscript.scripting.runtime
 
-import eternalscript.feedback.FeedbackKey
-import eternalscript.feedback.FeedbackLevel
-import eternalscript.feedback.SystemFeedback
-import eternalscript.feedback.systemFeedback
+import eternalscript.messaging.MessageKey
+import eternalscript.messaging.MessageLevel
+import eternalscript.messaging.SystemMessage
+import eternalscript.messaging.systemMessage
 import eternalscript.scripting.runtime.declaration.ScriptCommandDefinition
 import org.bukkit.command.Command
 import org.bukkit.command.CommandMap
@@ -13,7 +13,7 @@ import java.util.Locale
 
 internal class ScriptCommandRegistry(
     private val plugin: JavaPlugin,
-    private val system: (SystemFeedback) -> Unit
+    private val system: (SystemMessage) -> Unit
 ) {
     private val commandMap: CommandMap = plugin.server.commandMap
     private val knownCommands: MutableMap<String, Command> = commandMap.knownCommands
@@ -146,9 +146,9 @@ internal class ScriptCommandRegistry(
         plugin.server.onlinePlayers.forEach { player ->
             runCatching(player::updateCommands).onFailure { error ->
                 system(
-                    systemFeedback(
-                        FeedbackLevel.WARNING,
-                        FeedbackKey.SYSTEM_COMMAND_TREE_REFRESH_FAILED,
+                    systemMessage(
+                        MessageLevel.WARNING,
+                        MessageKey.SYSTEM_COMMAND_TREE_REFRESH_FAILED,
                         "player" to player.name,
                         "error" to (error.message ?: error.javaClass.name)
                     )

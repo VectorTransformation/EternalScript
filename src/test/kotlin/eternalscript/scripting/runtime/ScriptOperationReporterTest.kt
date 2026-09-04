@@ -4,8 +4,8 @@ import eternalscript.api.ScriptDiagnostic
 import eternalscript.api.ScriptDiagnosticPhase
 import eternalscript.api.ScriptOperation
 import eternalscript.api.ScriptOperationStatus
-import eternalscript.feedback.FeedbackKey
-import eternalscript.feedback.SystemFeedback
+import eternalscript.messaging.MessageKey
+import eternalscript.messaging.SystemMessage
 import eternalscript.scripting.repl.SharedReplDiagnostic
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -38,7 +38,7 @@ class ScriptOperationReporterTest {
 
     @Test
     fun `diagnostic logging preserves the compiler cause`() {
-        val logged = mutableListOf<SystemFeedback>()
+        val logged = mutableListOf<SystemMessage>()
         val cause = IllegalStateException("compiler failure")
         val internal = SharedReplDiagnostic(
             "broken.eternal.kts",
@@ -51,7 +51,7 @@ class ScriptOperationReporterTest {
 
         reporter.logDiagnostic(internal.toScriptDiagnostic(ScriptDiagnosticPhase.COMPILE), internal)
 
-        assertEquals(FeedbackKey.SYSTEM_DIAGNOSTIC, logged.single().text.key)
+        assertEquals(MessageKey.SYSTEM_DIAGNOSTIC, logged.single().text.key)
         assertSame(cause, logged.single().cause)
     }
 }

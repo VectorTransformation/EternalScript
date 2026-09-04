@@ -1,375 +1,320 @@
 # EternalScript
 
-EternalScript is a Kotlin Scripting runtime for Paper. All `.eternal.kts`
-sources are resolved together by a Kotlin K2 REPL pipeline, so every script can
-directly use variables, classes, and functions declared in any other script,
-regardless of logical path order. Kotlin `import` directives remain local to
-the file that declares them.
+EternalScript is a reloadable Kotlin scripting runtime for Paper. It compiles
+all enabled `.eternal.kts` files as one K2 project, allowing declarations to be
+shared across files while keeping ordinary Kotlin imports file-local.
 
-## Requirements and installation
+The project also includes an IntelliJ IDEA plugin that provides Kotlin analysis,
+completion, and navigation for an EternalScript workspace while the server is
+offline.
 
-- Java 25
-- Paper 26.2
-- EternalScript 2.1.2
+## Current release
 
-Place the EternalScript JAR in the server's `plugins` directory and start the
-server. Runtime files are created under `plugins/EternalScript/`:
+| Component | Version |
+| --- | --- |
+| EternalScript runtime | 2.1.2 |
+| IntelliJ plugin | 2.1.3 |
+| Paper API | 26.2 |
+| Java | 25 |
+| Kotlin | 2.4.10 |
+| IntelliJ IDEA | 2026.2.1 (`262.9437.185`) |
+
+## Features
+
+- Shared top-level values, functions, classes, objects, interfaces, enums, and
+  type aliases across script files.
+- Normal Kotlin file-local imports with no implicit convenience imports.
+- Typed Paper event listeners and reload-owned commands.
+- `onLoad`, `onUnload`, `onDispose`, and owned-resource lifecycle management.
+- Dependency-aware incremental recompilation and component reuse.
+- Transactional generation replacement with rollback after activation failure.
+- Persistent script enable and disable state through a leading `-` in a file or
+  directory name.
+- Compiled component cache with a fully stopped cache-hit restart path.
+- English, Korean, Japanese, and Simplified Chinese message catalogs.
+- A public Paper service API for other plugins.
+- IntelliJ K2 completion and navigation backed by the live server environment.
+
+## Installation
+
+1. Install Java 25 and a compatible Paper 26.2 server.
+2. Place `EternalScript-2.1.2.jar` in the server's `plugins` directory.
+3. Start the server once.
+4. Edit scripts under `plugins/EternalScript/scripts`.
+
+The first start creates this workspace:
 
 ```text
-EternalScript/
-├─ scripts/        # .eternal.kts sources
-├─ libs/           # additional JARs and class directories
-├─ lang/           # optional schema-4 message overrides
-├─ cache/          # runtime compiled-script cache
-├─ .eternalscript/
-│  └─ ide/
-│     └─ environment.properties  # IDE protocol v3 environment manifest
+plugins/EternalScript/
+├─ scripts/                    # .eternal.kts source files
+├─ libs/                       # additional JARs and class directories
+├─ lang/                       # optional message catalog overrides
+├─ data/storage.db             # Paper script persistent storage
+├─ cache/scripts-v5/           # compiled component cache
+├─ .eternalscript/ide/
+│  └─ environment.properties  # IntelliJ environment manifest
 └─ config.yml
 ```
 
-The server writes only `environment.properties` for IDE support. It records the
-IDE protocol version, stable environment ID, runtime and Kotlin versions,
-environment fingerprint, relative script root, runtime classpath file URIs, and
-the fixed convenience default imports.
-The file is replaced atomically on first start and whenever that environment
-changes. It contains no user declarations or compiled script output. `scripts`,
-`libs`, `lang`, and `config.yml` are never overwritten by this process.
+When `scripts` is first created, EternalScript installs an active
+`hello.eternal.kts` and a disabled `-example` directory. Existing scripts are
+never overwritten. Enable the examples with:
 
-When `plugins/EternalScript/scripts` does not exist, the first start installs
-the active `hello.eternal.kts` starter and the disabled `-example/` directory
-once. Existing script directories are never overwritten. Run `/es load example`
-to enable the command, event, shared-declaration, and lifecycle examples.
-
-## IntelliJ Kotlin completion
-
-Build the local IntelliJ plugin ZIP from this repository:
-
-```powershell
-.\gradlew.bat :intellij-plugin:buildPlugin
+```text
+/es enable example
 ```
 
-Install `intellij-plugin/build/distributions/EternalScript-2.1.3.zip` with
-**Settings | Plugins | gear menu | Install Plugin from Disk**, restart IDEA,
-and open any project containing the server-created
-`.eternalscript/ide/environment.properties` manifest.
-The plugin is intentionally limited to IntelliJ IDEA 2026.2.1 builds in the
-`262.*` line and K2 mode. It is not published to Marketplace and has no
-automatic updater. Use `:intellij-plugin:runIde` for a development sandbox.
+## Writing scripts
 
-Start the Paper server once so `environment.properties` exists. The plugin finds
-manifests through the project index; it has no hardcoded `run/plugins` candidate.
-The workspace root comes from the manifest location, and the validated relative
-`scriptRoot` selects the actual scripts directory, so moving or copying a whole
-workspace keeps the link valid. Multiple and nested workspaces are supported;
-each file belongs only to its nearest script root. If a manifest is missing,
-damaged, untrusted, unsafe, or incompatible, the plugin stops analysis for that
-workspace and shows a localized English, Korean, Japanese, or Simplified Chinese
-diagnostic. Once a valid manifest exists, the server may remain stopped while
-scripts are edited.
+Only files ending in the lowercase `.eternal.kts` suffix are loaded. A file or
+directory whose name begins with one `-` is disabled. Symbolic links are not
+followed while discovering scripts.
 
-Keep the `.eternal.kts` suffix and edit files below `scripts/`. `Ctrl+Space`
-completion includes the EternalScript DSL, Paper API, installed plugin APIs,
-classes from `libs`, and public or internal values, properties, overloads,
-extension functions, classes, objects, interfaces, enums, and type aliases from
-other scripts without explicit imports. External API types remain available for
-normal Kotlin auto-import. `Ctrl+B`, quick definition,
-`Alt+F7`, and `Shift+F6` are redirected to the real `.eternal.kts` declaration
-and usages. Rename writes only the original script files and aborts before the
-write action if the new name would collide with a shared declaration or make a
-shared name ambiguous.
-
-Document edits are collected for 300 ms and analyzed from the current unsaved
-PSI document. Saving, `/es load`, `/es reload`, and a running server are not
-required. A file-level declaration/reference index reanalyzes only the changed
-file and affected consumers. If a document is temporarily malformed, that file
-shows its normal Kotlin syntax errors while other files retain its last valid
-shared ABI. Cyclic references work when Kotlin has an explicit type boundary;
-recursive inference that Kotlin cannot determine remains an error.
-
-Disabled paths still receive the Script DSL, external API completion, and
-declarations exported by enabled scripts, so a `-test.eternal.kts` or a script
-below a `-directory` can be edited before it is enabled. Their own declarations
-do not enter the shared IDE model, matching the Paper runtime where disabled
-scripts are not compiled, evaluated, or loaded. Renaming the path to remove the
-leading `-` publishes its declarations; disabling it removes those exports.
-Multiple workspaces are isolated by workspace identity, and nested paths are
-owned by the nearest registered root.
-
-All declaration overlays live in IntelliJ memory and its system cache. The
-plugin does not create source `.kt` files, completion JARs, component models,
-or decompiler navigation targets in the project. During migration, the server
-removes only recognized old generated model files and old Gradle-workspace files
-whose hashes still match its management manifest. User-modified files are
-preserved and reported; `scripts`, `libs`, `lang`, and `config.yml` are never
-touched.
-
-The **Tools | EternalScript** menu can reread environments, open the current
-manifest, reveal its script root, and copy diagnostics containing workspace ID,
-analysis version, changed-file and ABI counts, configuration reloads,
-cancellations, and processing time.
-
-The IDE integration uses the experimental K2 `KaResolveExtension` SPI behind a
-262-specific facade. Protocol v3 is an immediate compatibility break: update
-the EternalScript runtime JAR and the 2.1.3 IntelliJ ZIP together. Rebuild and
-reinstall the ZIP after changing the IDE module or moving to another IDEA build
-line. See the
-[Kotlin custom scripting overview](https://kotlinlang.org/docs/custom-script-deps-tutorial.html)
-and [JetBrains IntelliJ Platform plugin documentation](https://plugins.jetbrains.com/docs/intellij/welcome.html).
-
-## Script files and shared declarations
-
-Only lowercase `.eternal.kts` files are loaded. A file or directory whose name
-starts with `-` is ignored. File annotations are not required.
-
-Declarations are shared in both directions. Explicit imports, import aliases,
-and star imports follow normal Kotlin rules and affect only their declaring
-file. Paper, installed plugin APIs, and `plugins/EternalScript/libs` remain on
-the compilation and runtime classpaths, so their other types use a normal
-explicit import or fully qualified name.
-
-The fixed convenience imports are `Bukkit`, `PlayerJoinEvent`,
-`PlayerQuitEvent`, `ScriptFeedbackLevel`, and `ScriptFeedbackMessage`. This
-small public list is independent of which plugins or library JARs happen to be
-installed.
-
-Logical path order is only a deterministic tie-breaker. Top-level values are
-initialized after the values they actually depend on, even when the provider
-has a later path. Unrelated scripts use logical path order. Eager initialization
-cycles are rejected before the active generation is changed.
+EternalScript adds no implicit user-facing imports. Import Paper, Adventure,
+plugin, library, and EternalScript API types exactly as normal Kotlin code does.
 
 ```kotlin
-// 00-state.eternal.kts
-import java.time.Instant
+import org.bukkit.event.player.PlayerJoinEvent
 
 var joinCount = 0
-data class JoinSummary(val player: String, val count: Int, val time: Instant)
 
-fun nextJoin(player: String): JoinSummary =
-    JoinSummary("$joinPrefix$player", ++joinCount, Instant.now())
-```
+fun nextJoinMessage(player: String): String =
+    "$player joined (#${++joinCount})"
 
-```kotlin
-// 10-join.eternal.kts
-import java.time.Instant
-import net.kyori.adventure.text.Component
-
-// The earlier function can use this later declaration. Imports stay local to
-// this file. Bukkit and PlayerJoinEvent are fixed convenience imports.
-val joinPrefix = "player:"
-val scriptStartedAt: Instant = Instant.now()
+onLoad {
+    notify().success("Join script loaded")
+}
 
 on<PlayerJoinEvent> { event ->
-    val summary = nextJoin(event.player.name)
-    Bukkit.broadcast(Component.text("${summary.player} joined (#${summary.count})"))
+    notify(event.player).info(nextJoinMessage(event.player.name))
 }
 ```
 
-Command and API paths omit the physical `scripts/` prefix. For example, the
-file `plugins/EternalScript/scripts/combat/a.eternal.kts` has the logical path
-`combat/a.eternal.kts`. Absolute paths, `..`, backslashes, and other extensions
-are rejected.
+Declarations are shared between enabled files in both directions. An import is
+visible only in the file containing that import. Top-level initialization is
+ordered by the actual declaration dependency graph; unrelated declarations use
+logical path order as a deterministic tie-breaker. Eager initialization cycles
+are rejected before the active generation changes.
 
-## Lifecycle, events, and commands
+### Lifecycle and resources
 
 ```kotlin
-import org.bukkit.event.EventPriority
-
 onLoad {
-    feedback(Bukkit.getConsoleSender(), "Script loaded", ScriptFeedbackLevel.SUCCESS)
+    // Runs when this script instance becomes active.
 }
 
 onUnload {
-    feedback(Bukkit.getConsoleSender(), "Script unloaded")
+    // Runs before an active instance is removed or replaced.
 }
 
-// AutoCloseable resources are closed automatically.
-val input = own(java.io.ByteArrayInputStream(byteArrayOf()))
-
-// Other resources can provide their own disposer.
-val worker = own(java.util.concurrent.Executors.newSingleThreadExecutor()) { executor ->
-    executor.shutdownNow()
+val executor = own(java.util.concurrent.Executors.newSingleThreadExecutor()) {
+    it.shutdownNow()
 }
 
 onDispose {
-    // Always runs for this evaluated instance, even if activation fails.
-}
-
-on<PlayerQuitEvent>(priority = EventPriority.MONITOR) { event ->
-    feedback(Bukkit.getConsoleSender(), "${event.player.name} left")
-}
-
-command("example-command") {
-    aliases("example")
-    permission(null)
-    tabCompleter { _, _, args ->
-        val current = args.lastOrNull().orEmpty()
-        listOf("hello", "world").filter { it.startsWith(current, ignoreCase = true) }
-    }
-    executor { sender, label, args ->
-        feedback(
-            sender,
-            ScriptFeedbackMessage(
-                title = "Example command completed",
-                details = listOf("/$label ${args.joinToString()}"),
-                hint = "Try /$label hello"
-            ),
-            ScriptFeedbackLevel.SUCCESS
-        )
-    }
+    // Runs once even when an evaluated candidate never becomes active.
 }
 ```
 
-`onLoad` runs whenever a compiled script instance is activated, even when no
-player is online. If a provider changes and an active consumer is replaced, the
-consumer can run `onUnload` and `onLoad` again as part of that atomic replacement.
+`own(resource)` closes an `AutoCloseable`. The overload with a disposer supports
+other resource types. Disposal callbacks run once in reverse registration order,
+and one cleanup failure does not prevent the remaining cleanup attempts.
 
-Scripts that reference each other form one atomic strongly connected component
-(SCC). A change recompiles that component and every component that depends on
-it; unrelated components and their instances stay active. The candidate is
-compiled and evaluated into staging first. Existing affected scripts then run
-`onUnload` in reverse initialization order, their listeners and commands are
-removed, the staged state is published, and `onLoad` runs in initialization
-order. A compile or staging failure leaves the active generation untouched. An
-activation or `onLoad` failure restores only the affected components from their
-previous in-memory artifacts.
+### Notifications (Paper)
 
-Listeners and commands are owned by EternalScript and are removed during
-unload or rollback. Use `own(resource)` for `AutoCloseable` values,
-`own(resource) { ... }` for other resource types, or `onDispose { ... }` for
-custom cleanup. Disposal runs exactly once in reverse registration order for a
-normal unload, a rejected candidate, and a failed activation. Every cleanup is
-attempted even when an earlier one fails. `onUnload` remains the place for
-active-only lifecycle behavior and runs before owned resources are disposed.
-
-Every script command must define an `executor`; a command without one is
-rejected during evaluation instead of registering a silent no-op. Permission
-checks use Bukkit's configured permission-denied message, and unauthorized
-senders cannot execute or tab-complete the command.
-
-### Script feedback
-
-`feedback` gives scripts the same consistent Adventure output used by the
-plugin. A recipient may be any Adventure `Audience`, including a player or the
-console. The available levels are `INFO`, `SUCCESS`, `WARNING`, and `ERROR`.
-Use the string overload for literal text or `ScriptFeedbackMessage` for a title,
-detail lines, and an optional hint. String values are never parsed as MiniMessage
-markup; pass Adventure `Component` values when deliberate styling is required.
-
-The feedback types are fixed default imports, so normal scripts do not need
-import statements:
+User-facing chat messages use a notifier scoped to an Adventure `Audience`:
 
 ```kotlin
-feedback(player, "Profile saved", ScriptFeedbackLevel.SUCCESS)
+import eternalscript.api.script.notification.ScriptNotification
+import net.kyori.adventure.text.Component
 
-feedback(
-    player,
-    ScriptFeedbackMessage(
-        title = "Profile could not be saved",
-        details = listOf("File: profiles/${player.uniqueId}.json"),
-        hint = "Try again or contact an administrator"
-    ),
-    ScriptFeedbackLevel.ERROR
+notify().success("Plugin script loaded") // Paper console by default
+notify(player).info("Profile loaded")
+notify(player).success("Profile saved")
+notify(player).warn("Using the default character")
+notify(player).error("Profile save failed")
+
+notify(player).success(
+    ScriptNotification(
+        title = Component.text("Profile saved"),
+        details = listOf(Component.text("Coins: 100")),
+        hint = Component.text("Use /profile to review it")
+    )
 )
 ```
 
-## Commands
+`INFO`, `SUCCESS`, `WARN`, and `ERROR` select the default color when the supplied
+component has no color. Existing Adventure styles, detail lines, and the hint
+line are preserved. Calling `notify()` without an audience selects
+`Bukkit.getConsoleSender()`. Notifications are sent only to the selected audience and
+are never copied to the server log automatically; call `log.error` separately
+when an operational record is required.
 
-`/eternalscript` is the primary command and `/es` is its alias. The command
-is visible to command senders. Operators can use every management action.
-Permission plugins can grant all actions with `eternalscript.admin`, or grant
-only one action with `eternalscript.command.<action>` where `action` is
-`help`, `reload`, `compile`, `load`, `unload`, `clear`, `config`, `list`, or
-`status`. An unauthorized action returns an explicit permission error.
+The former `feedback(...)`, `ScriptFeedbackLevel`, and `ScriptFeedbackMessage`
+API has been removed. Existing Paper scripts must migrate to `notify(...)` and
+`ScriptNotification` before they can be loaded by this runtime.
 
-- `/es` or `/es help` shows the built-in command help.
-- `/es reload` rereads enabled source files from disk, recompiles them, and
-  replaces the complete generation.
-- `/es compile` forcibly recompiles the current in-memory sources. Use
-  `/es reload` after editing a source file outside the server.
-- `/es load "path.eternal.kts"` removes a leading `-` from a script and loads
-  or replaces it together with the enabled providers it needs. A directory
-  target removes `-` from that directory only and recursively loads its
-  enabled descendants. Loading an already active target replaces it even when
-  its source text is unchanged, running `onUnload` and `onLoad` again for that
-  target and any affected active consumers while retaining unrelated scripts.
-- `/es unload "path.eternal.kts"` unloads a script and adds `-` to its file
-  name. A directory target unloads its active descendants and adds `-` to that
-  directory only. Nested `-` files and directories keep their names and remain
-  disabled.
-- `/es clear` cancels the current script operation, rejects reentrant mutations
-  until cleanup finishes, and unloads every active script without renaming files.
-- `/es config` reloads the `language` and `metrics` settings.
-- `/es list [page]` lists active logical paths in pages of ten.
-- `/es status` reports whether the runtime is starting, ready, or disabled,
-  the active-script count, and any script operation currently in progress.
+### Logging (Paper)
 
-Compilation requested by a command runs in the background. The existing
-generation continues handling events and commands until the result is applied
-on the Paper main thread. The sender receives an immediate request
-acknowledgement followed by the final result. Only one normal mutation is
-accepted at a time.
+Paper scripts write operational messages through the script-scoped `log` API:
 
-A single leading `-` on the target's final path segment is reserved as the
-persistent disabled marker. Commands accept either the logical path (`combat`)
-or its disabled spelling (`-combat`); names beginning with `--` are invalid.
-If both enabled and disabled spellings exist, the command is rejected. A
-compile, evaluation, activation, cancellation, or shutdown failure restores a
-name changed by the command.
+```kotlin
+log.debug { "Building an expensive diagnostic message" }
+log.info("Profile loaded")
+log.warn("Using the default character")
 
-For a consumer `hello.eternal.kts` that references declarations from
-`test.eternal.kts`:
+try {
+    error("example")
+} catch (error: Throwable) {
+    log.error("Profile save failed", error)
+}
+```
 
-- Loading `hello` also loads an enabled inactive `test`, with `test` initialized
-  first. A `-test.eternal.kts` remains explicitly disabled and makes the load
-  fail without changing `hello`'s disabled state.
-- Replacing `test` may replace an already active `hello`, but it does not load
-  an inactive consumer merely because that consumer references `test`.
-- Unloading `test` is rejected while an active `hello` outside the target uses
-  it. Unload the consumers first or unload a directory that contains both.
+`DEBUG`, `INFO`, `WARN`, and `ERROR` are available. Every message includes the
+logical script path, including messages written during top-level evaluation,
+lifecycle callbacks, events, commands, and `storageTask`. The lazy `debug`
+overload does not build its message while DEBUG logging is disabled. Messages
+and stack traces use Paper's standard console and server log; EternalScript does
+not create a separate log file.
 
-## Configuration and cache
+### Persistent storage (Paper)
 
-Default `config.yml` values are:
+Paper scripts can store global, player, and world values in
+`plugins/EternalScript/data/storage.db`. Declare stable namespace and key names
+at the top level, then perform I/O inside `storageTask`:
+
+```kotlin
+import org.bukkit.event.player.PlayerJoinEvent
+
+val profiles = storage("example.profiles")
+val coins = longKey("coins", 0L)
+val character = stringKey("character")
+
+on<PlayerJoinEvent> { event ->
+    storageTask {
+        val profile = profiles.player(event.player.uniqueId)
+        val balance = profile.update {
+            val next = this[coins] + 100L
+            this[coins] = next
+            if (this[character] == null) this[character] = "starter"
+            next
+        }
+        notify(event.player).success("Saved balance: $balance")
+    }
+}
+```
+
+`storageTask` starts and resumes on the Paper main thread; individual storage
+operations use EternalScript's database thread and return only after commit.
+Use `update` for atomic read-modify-write changes. Its non-suspending block runs
+on the database thread, so it must not call Bukkit or Paper APIs. Uncaught task
+failures are logged with the script path; use normal `try`/`catch` when the
+script should show a custom notification. Storage operations at or above
+`slow-storage-ms` produce a warning containing the script path, namespace,
+scope type, operation, key name when available, and elapsed time. Stored values
+and player or world UUIDs are not included.
+
+Supported keys cover strings, booleans, integers, longs, doubles, UUIDs, byte
+arrays, string lists and sets, and `JsonElement`. Assigning `null` to a nullable
+key removes it. A stored type never converts automatically when a key changes
+type. Storage survives script reloads and server restarts, while in-flight tasks
+are cancelled when their script is unloaded.
+
+### Commands
+
+```kotlin
+command("greet") {
+    aliases("hello")
+    permission("example.greet")
+    tabCompleter { _, _, args ->
+        val prefix = args.lastOrNull().orEmpty()
+        listOf("world", "server").filter {
+            it.startsWith(prefix, ignoreCase = true)
+        }
+    }
+    executor { sender, label, args ->
+        notify(sender).success("/$label ${args.joinToString(" ")}")
+    }
+}
+```
+
+Every script command must define an executor. Labels and aliases are registered
+strictly: a collision with Paper, another plugin, or another active script
+rejects activation instead of silently replacing the existing command.
+
+## Reload model
+
+Scripts are grouped into strongly connected components from their declaration
+dependencies. Changing a provider recompiles its component and active reverse
+dependents while unrelated components and instances remain active.
+
+A candidate is compiled and evaluated in staging. EternalScript changes the
+active generation only after staging succeeds. Compile or evaluation failure
+keeps the previous generation unchanged. If activation or `onLoad` fails, the
+affected previous components are restored from their in-memory artifacts.
+
+Listeners, commands, state, component classloaders, and owned resources belong
+to the generation that created them. They are removed or disposed during
+replacement, rollback, disable, and shutdown.
+
+## Server commands
+
+`/eternalscript` is the primary command and `/es` is its alias.
+
+| Command | Purpose |
+| --- | --- |
+| `/es` | Show engine state, active count, current operation, and command usage. |
+| `/es list [active\|disabled\|all] [page]` | List script targets; defaults to active scripts. |
+| `/es check [target]` | Compile enabled disk sources without applying them. |
+| `/es reload [target]` | Apply every enabled source, or reload one active target. |
+| `/es enable <target>` | Persistently enable a disabled script or directory. |
+| `/es disable <target>` | Unload a target and persist the leading `-` marker. |
+| `/es cancel` | Cancel preparation or compilation without unloading active scripts. |
+| `/es config reload` | Reload language, metrics, and catalog overrides. |
+
+Only one mutation is accepted at a time. Compilation runs in the background and
+the active generation continues handling events and commands until application
+on the Paper main thread. Once application or lifecycle cleanup begins, another
+mutation returns `BUSY`.
+
+Operators can use every management command. Permission plugins may grant
+`eternalscript.admin` or an individual permission:
+
+```text
+eternalscript.command.list
+eternalscript.command.check
+eternalscript.command.reload
+eternalscript.command.enable
+eternalscript.command.disable
+eternalscript.command.cancel
+eternalscript.command.config
+```
+
+## Configuration
+
+The default `config.yml` is:
 
 ```yaml
 language: en_US
 metrics: true
+cache: true
+logging-level: INFO
+slow-storage-ms: 500
 ```
 
-`language` selects the message catalog (`en_US`, `ko_KR`, `ja_JP`, or `zh_CN`), and `metrics`
-controls bStats reporting. Scripts and additional libraries always use
-`plugins/EternalScript/scripts` and `plugins/EternalScript/libs` respectively.
-`metrics` must be a YAML boolean. Invalid values and unknown top-level fields are
-reported by `/es config` instead of being accepted silently. A redundant legacy
-`lang` field is removed after its value has been migrated to `language`.
-A successfully activated component graph is cached under
-`plugins/EternalScript/cache/scripts-v5`. An unchanged cache-hit startup loads
-component JARs and their binary symbol index with zero compilation; no compiler
-warmup pass is required. Missing, stale, ABI-mismatched, or damaged cache data
-falls back to a cold compile. A later successful cache publish also removes
-temporary object directories left by an interrupted publish.
+Supported languages are `en_US`, `ko_KR`, `ja_JP`, and `zh_CN`. Unknown fields
+and invalid values are reported by `/es config`; they are not silently migrated
+or rewritten. `metrics` controls bStats reporting. `cache` controls compiled
+component cache reads and writes; set it to `false` to always compile scripts
+without deleting existing cache files. `logging-level` accepts
+`DEBUG`, `INFO`, `WARN`, or `ERROR` without case sensitivity. DEBUG messages are
+written to the standard server log with a `[DEBUG]` marker. `slow-storage-ms`
+sets the persistent-storage warning threshold; set it to `0` to disable those
+warnings. `/es config reload` applies the cache flag and both logging settings
+immediately.
 
-The batch REPL backend is coupled to the exact Kotlin compiler version declared
-by `kotlinVersion`. Its adapter ABI, runtime compiler libraries, and regression
-tests must be updated together. Do not update Kotlin independently or use an EAP
-compiler in a release build; validate bidirectional declarations, file-local imports, dependency
-closures, component-cache restart, rollback, and a Paper cold restart first.
-
-## Feedback catalogs and system logs
-
-All plugin-owned command responses and runtime messages pass through one
-feedback system. Player and command-sender output uses a single branded header
-followed by optional detail and recovery-hint lines. Console output uses the
-Paper logger without a duplicate plugin prefix and assigns lifecycle events to
-`INFO`, final cache or cleanup problems to `WARN`, and
-failed operations or diagnostics to `ERROR`. Compiler diagnostic text remains
-unchanged so exact Kotlin errors can still be searched; its phase and location
-wrapper is localized.
-
-Bundled English, Korean, Japanese, and Simplified Chinese catalogs are loaded
-from the plugin JAR. Files under
-`plugins/EternalScript/lang/` are optional partial overrides and are not created
-or overwritten by the plugin. They use schema 4 and named placeholders:
+Optional catalog overrides belong in `plugins/EternalScript/lang`. They use
+schema 4 and may replace a subset of known messages:
 
 ```json
 {
@@ -381,42 +326,96 @@ or overwritten by the plugin. They use schema 4 and named placeholders:
 }
 ```
 
-The filename and `_locale` must identify the same locale. Override keys must be
-known and must preserve exactly the named placeholders from the bundled entry.
-Catalogs are parsed and validated completely before replacing the active set;
-an invalid override is ignored with its exact filename and reason while the
-bundled catalog stays active. Legacy flat catalogs using `%s` are deliberately
-ignored and reported, rather than being partially interpreted as schema 4.
-The configured `language` must match a bundled catalog or a valid external
-catalog. A blank, non-string, or unknown value falls back to `en_US` and is
-reported as a configuration issue instead of silently claiming success.
-On first reload after upgrading from the legacy plugin, an existing `lang`
-value is migrated to `language` without changing the selected locale.
-`/es config` reloads configuration and these overrides without restarting the
-server.
+The filename and `_locale` must identify the same locale. An override must use
+known keys and preserve the bundled message placeholders. Invalid overrides are
+ignored without replacing the bundled catalog.
+
+## Cache
+
+Successful component artifacts are published under
+`plugins/EternalScript/cache/scripts-v5`. An unchanged restart loads cached JARs
+and the binary symbol index without compiling sources. Missing, stale, damaged,
+or ABI-incompatible cache entries fall back to compilation. Other cache-format
+directories are ignored and are not deleted automatically.
+
+The cache fingerprint includes the plugin artifact, Kotlin/compiler ABI,
+runtime classpath, additional libraries, source graph, JVM target, and relevant
+environment versions. Adding or upgrading a plugin or library therefore makes
+the old artifacts ineligible for reuse.
+
+## IntelliJ IDEA plugin
+
+Build the local plugin ZIP:
+
+```powershell
+.\gradlew.bat :intellij-plugin:buildPlugin
+```
+
+Install
+`intellij-plugin/build/distributions/EternalScript-2.1.3.zip` through
+**Settings | Plugins | Install Plugin from Disk**, restart IDEA, and open a
+project containing the server-created `.eternalscript/ide/environment.properties`.
+
+The plugin discovers manifests through the project index. The manifest provides
+the validated script root and runtime classpath; no `run/plugins` location is
+hardcoded. The server can remain stopped after a valid manifest has been
+created.
+
+The current IntelliJ integration provides:
+
+- Kotlin completion for the EternalScript DSL, Paper, installed plugins,
+  `libs`, and declarations from other scripts.
+- Analysis from the current unsaved document after a short debounce.
+- Dependency-aware reanalysis of changed files and affected consumers.
+- `Ctrl+B` and quick-definition navigation to the original `.eternal.kts`
+  declaration.
+- Multiple isolated workspaces, including nested workspace roots.
+
+Disabled paths remain ordinary IntelliJ project sources and participate in
+analysis. The leading `-` controls Paper runtime activation only.
+
+The integration targets K2 and the exact IDEA build `262.9437.185`. It uses an
+experimental `KaResolveExtension` integration, is not published to Marketplace,
+and has no automatic updater. Rebuild, verify, and reinstall it when changing
+the IDE module or supported IDEA build.
+
+## Compatibility with other plugins
+
+Normal Paper plugins can coexist with EternalScript. Script compilation and
+runtime resolution can see classes exposed by installed plugin classloaders, so
+an installed plugin API does not need to be copied into `libs`.
+
+Resolution prefers EternalScript's Paper and runtime classloader, then installed
+plugin classloaders in server plugin order, then `libs`. Do not use that order
+to select between duplicate fully qualified class names. Duplicate classes can
+cause compilation ambiguity, `LinkageError`, or `ClassCastException`.
+
+Kotlin APIs need additional care. If another plugin embeds an independent
+`kotlin/**` runtime and exposes Kotlin runtime types across its public boundary,
+the script and plugin may see different class identities. Prefer Java-facing
+plugin APIs using JDK or Paper types. When Kotlin types must cross the boundary,
+plugin authors should provide one compatible Kotlin runtime through an explicit
+Paper classpath relationship instead of shading unrelated copies.
+
+Do not put another installed plugin, EternalScript itself, or copies of
+EternalScript runtime libraries in `plugins/EternalScript/libs`. After changing
+the server plugin set, restart the server and validate startup, `/es reload`,
+and shutdown logs. A Gradle build alone does not validate Paper classloader or
+plugin lifecycle compatibility.
 
 ## External plugin API
 
-This section is only for authors of another Java or Kotlin Paper plugin that
-calls `EternalScriptApi`. Normal `.eternal.kts` scripts do **not** add a Gradle
-dependency, copy an EternalScript JAR into their source directory, or import
-the external-plugin API.
-
-EternalScript is distributed as one plugin JAR, not as a separate API module.
-Put that JAR in the consuming plugin project's `libs` directory and add it only
-to the compile classpath:
+Another Paper plugin can control EternalScript through `EternalScriptApi`.
+Compile against the runtime JAR without shading it:
 
 ```kotlin
 dependencies {
     compileOnly(files("libs/EternalScript-2.1.2.jar"))
-    // Also declare the normal Paper API or paperweight dependency used by
-    // this consuming plugin project.
 }
 ```
 
-Do not shade EternalScript into the consuming plugin. At runtime, install the
-same EternalScript JAR as a server plugin and declare it as a required Paper
-server dependency:
+Declare EternalScript as a required Paper server dependency of the consuming
+plugin:
 
 ```yaml
 dependencies:
@@ -427,68 +426,54 @@ dependencies:
       join-classpath: true
 ```
 
-`compileOnly` means the consuming plugin's compiler can resolve the API while
-the class itself is supplied by the enabled EternalScript plugin at runtime.
-`join-classpath: true` gives the consuming Paper plugin access to that API
-classloader.
-
-### Java
-
-```java
-import eternalscript.api.EternalScriptApi;
-import eternalscript.api.ScriptOperationResult;
-import eternalscript.api.ScriptSnapshot;
-
-import java.util.concurrent.CompletionStage;
-
-EternalScriptApi api = EternalScriptApi.get();
-ScriptSnapshot snapshot = api.snapshot();
-CompletionStage<ScriptOperationResult> pending = api.reload();
-
-pending.thenAccept(result ->
-    getLogger().info("reload=" + result.getStatus()
-        + ", revision=" + result.getRevision())
-);
-```
-
-`get()` throws a clear exception when the service is unavailable;
-`getOrNull()` returns `null`. Mutation methods return
-`CompletionStage<ScriptOperationResult>` and normal domain failures are
-reported through `SUCCESS`, `NO_CHANGE`, `BUSY`, `NOT_FOUND`, `INVALID_PATH`,
-`FAILED`, `CANCELLED`, or `DISABLED` rather than exceptional completion.
-
-### Kotlin
+Then obtain the registered service:
 
 ```kotlin
 import eternalscript.api.EternalScriptApi
-import eternalscript.api.loadAwait
+import eternalscript.api.enableAwait
 
-suspend fun loadCombatScript() {
+suspend fun enableCombatScript() {
     val api = EternalScriptApi.getOrNull() ?: return
-    val snapshot = api.snapshot()
-    val result = api.loadAwait("combat/a.eternal.kts")
-    logger.info("${snapshot.state} -> ${result.status} @ ${result.revision}")
+    val result = api.enableAwait("combat/main.eternal.kts")
+    logger.info("${result.status} @ revision ${result.revision}")
 }
 ```
 
-Kotlin also provides `reloadAwait`, `recompileAwait`, `unloadAwait`, and
-`clearAwait`. Cancelling the coroutine wait does not cancel an operation that
-the shared engine has already accepted. `reload()` applies only detected disk
-changes and their reverse dependents, while `recompile()` forces a complete
-compiler/evaluator generation.
+The API exposes `snapshot`, `check`, `reload`, `recompile`, `enable`, `disable`, and `cancel`.
+Mutation methods return `CompletionStage<ScriptOperationResult>`. Kotlin callers
+may use the corresponding `*Await` extensions. Domain failures are returned as
+`SUCCESS`, `NO_CHANGE`, `BUSY`, `NOT_FOUND`, `INVALID_PATH`, `FAILED`,
+`CANCELLED`, or `DISABLED`.
 
-## Build
+`recompile` is intentionally API-only: it recompiles the current in-memory
+source texts without rereading disk. The server command for applying disk edits
+is `/es reload`.
+
+## Build and verification
+
+Run the complete static release gate:
 
 ```powershell
-.\gradlew.bat test check --rerun-tasks
-.\gradlew.bat shadowJar :intellij-plugin:verifyPlugin :intellij-plugin:buildPlugin
+.\gradlew.bat releaseCheck --rerun-tasks --no-daemon --console=plain
 ```
 
-The wrapper stays on Gradle 9.7 because `run-paper` 3.1.0 targets the Gradle 9.7
-plugin API. Kotlin 2.4.10 currently declares full Gradle support through 9.5,
-so Gradle, the Kotlin plugin, `run-paper`, and the compiler adapter must be
-validated and upgraded together rather than changed independently.
+`releaseCheck` builds and tests the runtime, IDE protocol, and IntelliJ plugin;
+creates the shaded runtime JAR and IntelliJ distribution; and runs Plugin
+Verifier against the supported IDEA build.
 
-The runtime artifact is `build/libs/EternalScript-2.1.2.jar`. The local IDEA
-installation artifact is
-`intellij-plugin/build/distributions/EternalScript-2.1.3.zip`.
+The `runServer` task starts the Paper test server.
+
+Release artifacts:
+
+```text
+build/libs/EternalScript-2.1.2.jar
+intellij-plugin/build/distributions/EternalScript-2.1.3.zip
+```
+
+The static gate does not prove server behavior. Before publishing a runtime
+release, separately validate a Paper cold start, script load and reload,
+intentional rollback, fully stopped cache-hit restart, and clean shutdown.
+
+## License
+
+EternalScript is available under the [MIT License](LICENSE).

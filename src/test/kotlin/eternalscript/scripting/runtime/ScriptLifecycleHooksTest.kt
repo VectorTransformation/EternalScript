@@ -61,11 +61,28 @@ class ScriptLifecycleHooksTest {
         assertTrue("own" in methods)
         assertTrue("on" in methods)
         assertTrue("command" in methods)
+        assertTrue("storage" in methods)
+        assertTrue("storageTask" in methods)
+        assertTrue("getLog" in methods)
+        assertTrue("notify" in methods)
+        assertFalse("feedback" in methods)
+        assertTrue("longKey" in methods)
+        assertTrue("jsonKey" in methods)
         assertFalse("instance" in methods)
         assertFalse("scripts" in methods)
         assertFalse("script" in methods)
         assertFalse("call" in methods)
         assertFalse("export" in methods)
+    }
+
+    @Test
+    fun `removed feedback API types are absent`() {
+        assertFailsWith<ClassNotFoundException> {
+            Class.forName("eternalscript.api.script.feedback.ScriptFeedbackLevel")
+        }
+        assertFailsWith<ClassNotFoundException> {
+            Class.forName("eternalscript.api.script.feedback.ScriptFeedbackMessage")
+        }
     }
 
     @Test

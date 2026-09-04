@@ -1,6 +1,8 @@
 package eternalscript.scripting.runtime
 
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.asContextElement
 
 /**
  * Stable state object referenced by generated K2 REPL classes. Candidate evaluation uses a
@@ -42,6 +44,9 @@ internal object ReplStateBridge : HashMap<String, Any?>() {
             if (previous == null) execution.remove() else execution.set(previous)
         }
     }
+
+    fun contextElement(table: StateTable): ThreadContextElement<StateTable?> =
+        execution.asContextElement(table)
 
     fun snapshot(): StateTable = active.get().copy()
 

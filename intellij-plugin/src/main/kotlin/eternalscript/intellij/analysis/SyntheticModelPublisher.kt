@@ -1,6 +1,5 @@
 package eternalscript.intellij.analysis
 
-import eternalscript.intellij.model.EternalScriptConflictAnalyzer
 import eternalscript.intellij.model.EternalScriptDeclarationRenderer
 import eternalscript.intellij.model.EternalScriptFileAbi
 import eternalscript.intellij.model.EternalScriptGeneratedFile
@@ -21,16 +20,14 @@ internal object SyntheticModelPublisher {
         previous: EternalScriptWorkspace?
     ): PublishedWorkspace {
         val sourceUrls = files.keys.toCollection(linkedSetOf())
-        val activeUrls = files.values.asSequence().filter(IndexedScriptFile::active)
-            .mapTo(linkedSetOf(), IndexedScriptFile::url)
-        // Disabled sources stay indexed so their own editor has the Script DSL and can consume
-        // active declarations. Runtime skips them, so they must not contribute shared exports.
-        val ideAbis = activeUrls.mapNotNull(abis::get)
+        // Runtime activation remains separate metadata. IntelliJ treats every indexed source as
+        // an ordinary project source, including leading-'-' files and directories.
+        val ideAbis = sourceUrls.mapNotNull(abis::get)
         val packageName = "eternalscript.ide.synthetic.w${descriptor.id}"
         val receiverName = "EternalScriptSharedReceiver_${descriptor.id}"
         val syntheticInputsUnchanged = syntheticInputsUnchanged(
             previous,
-            activeUrls,
+            sourceUrls,
             abis,
             packageName,
             receiverName
@@ -51,16 +48,6 @@ internal object SyntheticModelPublisher {
                     ?: candidate
             }
         }
-        val conflicts = if (syntheticInputsUnchanged) {
-            requireNotNull(previous).conflicts
-        } else {
-            val relativeAbis = activeUrls.mapNotNull { url ->
-                val file = files[url] ?: return@mapNotNull null
-                val abi = abis[url] ?: return@mapNotNull null
-                descriptor.scriptRoot.relativize(file.path).toString().replace('\\', '/') to abi
-            }.toMap()
-            EternalScriptConflictAnalyzer.analyzeAbis(relativeAbis)
-        }
         val changedNames = if (
             syntheticInputsUnchanged &&
             previous != null &&
@@ -70,7 +57,7 @@ internal object SyntheticModelPublisher {
         } else {
             changedDeclarationNames(
                 descriptor,
-                activeUrls,
+                sourceUrls,
                 abis,
                 previous
             )
@@ -89,7 +76,6 @@ internal object SyntheticModelPublisher {
             previous.manifestDigest == descriptor.manifestDigest &&
             previous.scriptRoot == descriptor.scriptRoot &&
             previous.sourceUrls == sourceUrls &&
-            previous.activeSourceUrls == activeUrls &&
             generatedSignatures(previous.generatedFiles) == generatedSignatures(generated)
         ) {
             previous.digest
@@ -106,9 +92,7 @@ internal object SyntheticModelPublisher {
                 FqName(packageName),
                 receiverName,
                 sourceUrls,
-                activeUrls,
                 abis,
-                conflicts,
                 changedNames,
                 generated,
                 configurationFingerprint,
@@ -120,38 +104,38 @@ internal object SyntheticModelPublisher {
 
     private fun syntheticInputsUnchanged(
         previous: EternalScriptWorkspace?,
-        activeUrls: Set<String>,
+        sourceUrls: Set<String>,
         abis: Map<String, EternalScriptFileAbi>,
         packageName: String,
         receiverName: String
     ): Boolean = previous != null &&
         previous.packageName.asString() == packageName &&
         previous.receiverName == receiverName &&
-        previous.activeSourceUrls == activeUrls &&
-        activeUrls.all { url -> previous.fileAbis[url]?.abiDigest == abis[url]?.abiDigest }
+        previous.sourceUrls == sourceUrls &&
+        sourceUrls.all { url -> previous.fileAbis[url]?.abiDigest == abis[url]?.abiDigest }
 
     private fun changedDeclarationNames(
         descriptor: EternalScriptWorkspaceDescriptor,
-        activeUrls: Set<String>,
+        sourceUrls: Set<String>,
         abis: Map<String, EternalScriptFileAbi>,
         previous: EternalScriptWorkspace?
     ): Set<String> {
         val changedNames = linkedSetOf<String>()
-        val previousSources = previous?.activeSourceUrls.orEmpty()
-        (previousSources + activeUrls).forEach { url ->
+        val previousSources = previous?.sourceUrls.orEmpty()
+        (previousSources + sourceUrls).forEach { url ->
             val old = previous?.fileAbis?.get(url)
             val new = abis[url]
-            if ((url in previousSources) != (url in activeUrls) || old?.abiDigest != new?.abiDigest) {
+            if ((url in previousSources) != (url in sourceUrls) || old?.abiDigest != new?.abiDigest) {
                 old?.exportedNames()?.let(changedNames::addAll)
                 new?.exportedNames()?.let(changedNames::addAll)
             }
         }
         if (previous?.manifestDigest != descriptor.manifestDigest) {
             val previousAbis = previous?.fileAbis.orEmpty()
-            previous?.activeSourceUrls.orEmpty()
+            previous?.sourceUrls.orEmpty()
                 .mapNotNull(previousAbis::get)
                 .forEach { abi -> changedNames += abi.exportedNames() }
-            activeUrls.mapNotNull(abis::get).forEach { abi -> changedNames += abi.exportedNames() }
+            sourceUrls.mapNotNull(abis::get).forEach { abi -> changedNames += abi.exportedNames() }
         }
         return changedNames
     }
@@ -166,7 +150,7 @@ internal object SyntheticModelPublisher {
         appendLine(descriptor.manifestDigest)
         files.values.sortedBy { file -> file.path.toString() }.forEach { file ->
             appendLine(descriptor.scriptRoot.relativize(file.path).toString())
-            append(if (file.active) 'A' else 'D').appendLine(file.url)
+            appendLine(file.url)
         }
         generatedSignatures(generatedFiles).forEach { signature -> appendLine(signature) }
     })

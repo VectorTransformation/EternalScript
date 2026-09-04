@@ -1,6 +1,11 @@
 pluginManagement {
     val kotlinVersion = providers.gradleProperty("kotlinVersion").get()
 
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+
     plugins {
         // https://plugins.gradle.org/plugin/org.gradle.toolchains.foojay-resolver-convention
         id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"

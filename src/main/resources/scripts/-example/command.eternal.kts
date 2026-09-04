@@ -1,7 +1,9 @@
 /**
- * A reload-owned command with an alias, suggestions, and structured feedback.
- * Enable the disabled example directory with `/es load example`.
+ * A reload-owned command with an alias, suggestions, and a structured notification.
+ * Enable the disabled example directory with `/es enable example`.
  */
+
+import eternalscript.api.script.notification.ScriptNotification
 
 command("example-command") {
     aliases("example")
@@ -14,9 +16,8 @@ command("example-command") {
     }
     executor { sender, label, args ->
         val arguments = args.joinToString().ifBlank { "(none)" }
-        feedback(
-            sender,
-            ScriptFeedbackMessage(
+        notify(sender).success(
+            ScriptNotification(
                 title = "Example command completed",
                 details = listOf(
                     "Sender: ${sender.name}",
@@ -24,8 +25,7 @@ command("example-command") {
                     "Arguments: $arguments"
                 ),
                 hint = "Try /$label hello"
-            ),
-            ScriptFeedbackLevel.SUCCESS
+            )
         )
     }
 }

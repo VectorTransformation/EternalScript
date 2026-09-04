@@ -1,25 +1,36 @@
 package eternalscript.config
 
+import eternalscript.logging.EternalLogLevel
 import org.bukkit.configuration.file.YamlConfiguration
 import org.bukkit.configuration.InvalidConfigurationException
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ConfigServiceTest {
     @Test
-    fun `creates a config with only language and metrics`() {
+    fun `creates a config with logging defaults`() {
         withTemporaryConfig { configFile ->
             val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
 
-            assertEquals(PluginConfig(metricsEnabled = true, language = "en_US"), report.config)
+            assertEquals(
+                PluginConfig(true, true, "en_US", EternalLogLevel.INFO, 500L),
+                report.config
+            )
             assertTrue(report.issues.isEmpty())
             val yaml = YamlConfiguration.loadConfiguration(configFile)
-            assertEquals(setOf("language", "metrics"), yaml.getKeys(false))
+            assertEquals(
+                setOf("language", "metrics", "cache", "logging-level", "slow-storage-ms"),
+                yaml.getKeys(false)
+            )
             assertEquals("en_US", yaml.getString("language"))
             assertEquals(true, yaml.getBoolean("metrics"))
+            assertEquals(true, yaml.getBoolean("cache"))
+            assertEquals("INFO", yaml.getString("logging-level"))
+            assertEquals(500L, yaml.getLong("slow-storage-ms"))
         }
     }
 
@@ -31,40 +42,91 @@ class ConfigServiceTest {
 
             val report = ConfigService(configFile).reload(DEFAULT_LOCALES + "pirate")
 
-            assertEquals(PluginConfig(metricsEnabled = false, language = "pirate"), report.config)
+            assertEquals(
+                PluginConfig(false, true, "pirate", EternalLogLevel.INFO, 500L),
+                report.config
+            )
             assertTrue(report.issues.isEmpty())
         }
     }
 
     @Test
-    fun `migrates the legacy lang key without resetting the selected language`() {
+    fun `accepts disabled cache`() {
         withTemporaryConfig { configFile ->
             configFile.parentFile.mkdirs()
-            configFile.writeText("lang: ko_KR\nmetrics: false\n", Charsets.UTF_8)
+            configFile.writeText("language: en_US\nmetrics: true\ncache: false\n", Charsets.UTF_8)
 
             val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
-            val yaml = YamlConfiguration.loadConfiguration(configFile)
 
-            assertEquals(PluginConfig(metricsEnabled = false, language = "ko_KR"), report.config)
+            assertFalse(report.config.cacheEnabled)
             assertTrue(report.issues.isEmpty())
-            assertEquals("ko_KR", yaml.getString("language"))
-            assertTrue(!yaml.contains("lang"))
         }
     }
 
     @Test
-    fun `removes a redundant legacy lang key when language already exists`() {
+    fun `invalid cache value falls back and reports an issue`() {
         withTemporaryConfig { configFile ->
             configFile.parentFile.mkdirs()
-            configFile.writeText("language: ja_JP\nlang: ko_KR\nmetrics: true\n", Charsets.UTF_8)
+            configFile.writeText("language: en_US\nmetrics: true\ncache: no please\n", Charsets.UTF_8)
 
             val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
-            val yaml = YamlConfiguration.loadConfiguration(configFile)
 
-            assertEquals(PluginConfig(metricsEnabled = true, language = "ja_JP"), report.config)
+            assertTrue(report.config.cacheEnabled)
+            assertEquals(1, report.issues.size)
+            assertTrue(report.issues.single().reason.contains("cache must be a boolean"))
+        }
+    }
+
+    @Test
+    fun `accepts case insensitive logging level and disabled slow storage warning`() {
+        withTemporaryConfig { configFile ->
+            configFile.parentFile.mkdirs()
+            configFile.writeText(
+                "language: en_US\nmetrics: true\nlogging-level: debug\nslow-storage-ms: 0\n",
+                Charsets.UTF_8
+            )
+
+            val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
+
+            assertEquals(EternalLogLevel.DEBUG, report.config.loggingLevel)
+            assertEquals(0L, report.config.slowStorageMillis)
             assertTrue(report.issues.isEmpty())
-            assertEquals("ja_JP", yaml.getString("language"))
-            assertTrue(!yaml.contains("lang"))
+        }
+    }
+
+    @Test
+    fun `invalid logging settings fall back and report both issues`() {
+        withTemporaryConfig { configFile ->
+            configFile.parentFile.mkdirs()
+            configFile.writeText(
+                "language: en_US\nmetrics: true\nlogging-level: verbose\nslow-storage-ms: -1\n",
+                Charsets.UTF_8
+            )
+
+            val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
+
+            assertEquals(EternalLogLevel.INFO, report.config.loggingLevel)
+            assertEquals(500L, report.config.slowStorageMillis)
+            assertEquals(2, report.issues.size)
+            assertTrue(report.issues.any { issue -> "logging-level" in issue.reason })
+            assertTrue(report.issues.any { issue -> "slow-storage-ms" in issue.reason })
+        }
+    }
+
+    @Test
+    fun `slow storage threshold rejects decimal numbers`() {
+        withTemporaryConfig { configFile ->
+            configFile.parentFile.mkdirs()
+            configFile.writeText(
+                "language: en_US\nmetrics: true\nlogging-level: INFO\nslow-storage-ms: 1.5\n",
+                Charsets.UTF_8
+            )
+
+            val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
+
+            assertEquals(500L, report.config.slowStorageMillis)
+            assertEquals(1, report.issues.size)
+            assertTrue("slow-storage-ms" in report.issues.single().reason)
         }
     }
 
@@ -114,16 +176,22 @@ class ConfigServiceTest {
     }
 
     @Test
-    fun `reports unknown top-level fields without discarding valid settings`() {
+    fun `reports an old field without migrating or discarding valid settings`() {
         withTemporaryConfig { configFile ->
             configFile.parentFile.mkdirs()
-            configFile.writeText("language: ko_KR\nmetrics: false\nmatrics: true\n", Charsets.UTF_8)
+            configFile.writeText("language: ja_JP\nlang: ko_KR\nmetrics: false\n", Charsets.UTF_8)
 
             val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
+            val yaml = YamlConfiguration.loadConfiguration(configFile)
 
-            assertEquals(PluginConfig(metricsEnabled = false, language = "ko_KR"), report.config)
+            assertEquals(
+                PluginConfig(false, true, "ja_JP", EternalLogLevel.INFO, 500L),
+                report.config
+            )
             assertEquals(1, report.issues.size)
-            assertTrue(report.issues.single().reason.contains("matrics"))
+            assertTrue(report.issues.single().reason.contains("lang"))
+            assertEquals("ko_KR", yaml.getString("lang"))
+            assertEquals("ja_JP", yaml.getString("language"))
         }
     }
 
@@ -141,7 +209,10 @@ class ConfigServiceTest {
                 service.reload(DEFAULT_LOCALES)
             }
 
-            assertEquals(PluginConfig(metricsEnabled = false, language = "ko_KR"), service.current)
+            assertEquals(
+                PluginConfig(false, true, "ko_KR", EternalLogLevel.INFO, 500L),
+                service.current
+            )
             assertEquals(malformed, configFile.readText(Charsets.UTF_8))
         }
     }
@@ -155,7 +226,10 @@ class ConfigServiceTest {
             val report = ConfigService(configFile).reload(DEFAULT_LOCALES)
             val yaml = YamlConfiguration.loadConfiguration(configFile)
 
-            assertEquals(PluginConfig(metricsEnabled = false, language = "en_US"), report.config)
+            assertEquals(
+                PluginConfig(false, true, "en_US", EternalLogLevel.INFO, 500L),
+                report.config
+            )
             assertTrue(report.issues.isEmpty())
             assertEquals("en_US", yaml.getString("language"))
             assertEquals(false, yaml.getBoolean("metrics"))

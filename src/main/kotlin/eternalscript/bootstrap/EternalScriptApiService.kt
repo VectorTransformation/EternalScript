@@ -13,11 +13,17 @@ internal class EternalScriptApiService(
 
     override fun reload(): CompletionStage<ScriptOperationResult> = engine.reload()
 
+    override fun reload(path: String): CompletionStage<ScriptOperationResult> = engine.reload(path)
+
+    override fun check(): CompletionStage<ScriptOperationResult> = engine.check()
+
+    override fun check(path: String): CompletionStage<ScriptOperationResult> = engine.check(path)
+
     override fun recompile(): CompletionStage<ScriptOperationResult> = engine.recompile()
 
-    override fun load(path: String): CompletionStage<ScriptOperationResult> = engine.load(path)
+    override fun enable(path: String): CompletionStage<ScriptOperationResult> = engine.enable(path)
 
-    override fun unload(path: String): CompletionStage<ScriptOperationResult> = engine.unload(path)
+    override fun disable(path: String): CompletionStage<ScriptOperationResult> = engine.disable(path)
 
-    override fun clear(): CompletionStage<ScriptOperationResult> = engine.clear()
+    override fun cancel(): CompletionStage<ScriptOperationResult> = engine.cancel()
 }

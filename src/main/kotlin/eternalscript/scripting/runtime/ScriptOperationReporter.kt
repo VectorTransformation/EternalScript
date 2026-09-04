@@ -5,17 +5,17 @@ import eternalscript.api.ScriptDiagnosticPhase
 import eternalscript.api.ScriptOperation
 import eternalscript.api.ScriptOperationResult
 import eternalscript.api.ScriptOperationStatus
-import eternalscript.feedback.FeedbackKey
-import eternalscript.feedback.FeedbackLevel
-import eternalscript.feedback.SystemFeedback
-import eternalscript.feedback.feedbackText
-import eternalscript.feedback.systemFeedback
+import eternalscript.messaging.MessageKey
+import eternalscript.messaging.MessageLevel
+import eternalscript.messaging.SystemMessage
+import eternalscript.messaging.messageText
+import eternalscript.messaging.systemMessage
 import eternalscript.scripting.repl.SharedReplDiagnostic
 import java.util.List.copyOf
 
 internal class ScriptOperationReporter(
     private val revision: () -> Long,
-    private val system: (SystemFeedback) -> Unit
+    private val system: (SystemMessage) -> Unit
 ) {
     fun result(
         operation: ScriptOperation,
@@ -32,11 +32,11 @@ internal class ScriptOperationReporter(
 
     fun logDiagnostic(diagnostic: ScriptDiagnostic, internal: SharedReplDiagnostic? = null) {
         system(
-            systemFeedback(
-                FeedbackLevel.ERROR,
-                FeedbackKey.SYSTEM_DIAGNOSTIC,
+            systemMessage(
+                MessageLevel.ERROR,
+                MessageKey.SYSTEM_DIAGNOSTIC,
                 "source" to diagnostic.source,
-                "phase" to diagnostic.phase.feedbackText(),
+                "phase" to diagnostic.phase.messageText(),
                 "line" to diagnostic.line,
                 "column" to diagnostic.column,
                 "message" to diagnostic.message,

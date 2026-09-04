@@ -2,6 +2,8 @@ plugins {
     `java-library`
 }
 
+val javaVersion = providers.gradleProperty("javaVersion").map(String::toInt).get()
+
 repositories {
     mavenCentral()
 }
@@ -13,11 +15,11 @@ dependencies {
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    toolchain.languageVersion = JavaLanguageVersion.of(javaVersion)
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 25
+    options.release = javaVersion
     options.encoding = "UTF-8"
 }
 

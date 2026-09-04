@@ -29,10 +29,13 @@ class EternalScriptApiContractTest {
         )
 
         override fun reload() = completed(ScriptOperation.RELOAD)
+        override fun reload(path: String) = completed(ScriptOperation.RELOAD)
+        override fun check() = completed(ScriptOperation.CHECK)
+        override fun check(path: String) = completed(ScriptOperation.CHECK)
         override fun recompile() = completed(ScriptOperation.RECOMPILE)
-        override fun load(path: String) = completed(ScriptOperation.LOAD)
-        override fun unload(path: String) = completed(ScriptOperation.UNLOAD)
-        override fun clear() = completed(ScriptOperation.CLEAR)
+        override fun enable(path: String) = completed(ScriptOperation.ENABLE)
+        override fun disable(path: String) = completed(ScriptOperation.DISABLE)
+        override fun cancel() = completed(ScriptOperation.CANCEL)
 
         private fun completed(operation: ScriptOperation): CompletionStage<ScriptOperationResult> =
             CompletableFuture.completedFuture(success.copy(operation = operation))
@@ -40,7 +43,7 @@ class EternalScriptApiContractTest {
 
     @Test
     fun `exposes stable API version and nullable service lookup`() {
-        assertEquals(1, EternalScriptApi.API_VERSION)
+        assertEquals(2, EternalScriptApi.API_VERSION)
         assertNull(EternalScriptApi.getOrNull())
         assertFailsWith<IllegalStateException> { EternalScriptApi.get() }
     }
@@ -48,10 +51,11 @@ class EternalScriptApiContractTest {
     @Test
     fun `suspend adapters preserve CompletionStage results`() = runBlocking {
         assertEquals(ScriptOperation.RELOAD, api.reloadAwait().operation)
+        assertEquals(ScriptOperation.CHECK, api.checkAwait().operation)
         assertEquals(ScriptOperation.RECOMPILE, api.recompileAwait().operation)
-        assertEquals(ScriptOperation.LOAD, api.loadAwait("a.eternal.kts").operation)
-        assertEquals(ScriptOperation.UNLOAD, api.unloadAwait("a.eternal.kts").operation)
-        assertEquals(ScriptOperation.CLEAR, api.clearAwait().operation)
+        assertEquals(ScriptOperation.ENABLE, api.enableAwait("a.eternal.kts").operation)
+        assertEquals(ScriptOperation.DISABLE, api.disableAwait("a.eternal.kts").operation)
+        assertEquals(ScriptOperation.CANCEL, api.cancelAwait().operation)
     }
 
     @Test

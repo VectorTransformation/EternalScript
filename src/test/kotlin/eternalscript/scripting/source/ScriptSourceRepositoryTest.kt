@@ -179,6 +179,54 @@ class ScriptSourceRepositoryTest {
                 listOf("combat", "combat/a.eternal.kts", "disabled", "file.eternal.kts"),
                 discoverScriptTargets(root.toFile())
             )
+            assertEquals(
+                listOf(
+                    DiscoveredScriptTarget("combat", ScriptTargetKind.DIRECTORY, true),
+                    DiscoveredScriptTarget("combat/a.eternal.kts", ScriptTargetKind.FILE, true),
+                    DiscoveredScriptTarget("disabled", ScriptTargetKind.DIRECTORY, false),
+                    DiscoveredScriptTarget("file.eternal.kts", ScriptTargetKind.FILE, false)
+                ),
+                discoverScriptTargetEntries(root.toFile())
+            )
+
+            root.resolve("created-later.eternal.kts").writeText("val createdLater = true")
+            assertEquals(
+                listOf(
+                    "combat",
+                    "combat/a.eternal.kts",
+                    "created-later.eternal.kts",
+                    "disabled",
+                    "file.eternal.kts"
+                ),
+                discoverScriptTargets(root.toFile())
+            )
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `combined scan returns sources and targets from the same tree state`() {
+        val root = Files.createTempDirectory("eternalscript-combined-scan")
+        try {
+            root.resolve("active").createDirectories()
+                .resolve("a.eternal.kts").writeText("val a = 1")
+            root.resolve("-disabled").createDirectories()
+                .resolve("hidden.eternal.kts").writeText("error(\"hidden\")")
+            root.resolve("-file.eternal.kts").writeText("val disabled = true")
+
+            val scan = scanScriptSources(root.toFile())
+
+            assertEquals(listOf("active/a.eternal.kts"), scan.sources.map(ScriptSourceFile::name))
+            assertEquals(
+                listOf(
+                    DiscoveredScriptTarget("active", ScriptTargetKind.DIRECTORY, true),
+                    DiscoveredScriptTarget("active/a.eternal.kts", ScriptTargetKind.FILE, true),
+                    DiscoveredScriptTarget("disabled", ScriptTargetKind.DIRECTORY, false),
+                    DiscoveredScriptTarget("file.eternal.kts", ScriptTargetKind.FILE, false)
+                ),
+                scan.targets
+            )
         } finally {
             root.toFile().deleteRecursively()
         }
